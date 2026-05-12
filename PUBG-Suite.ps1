@@ -1355,7 +1355,7 @@ Add-Type -AssemblyName System.Windows.Forms
                     <StackPanel Grid.Row="1" Margin="0,0,0,16">
                         <CheckBox x:Name="cbMonitors" Content="Monitore: nur OLED aktiv (Acer XB271HU deaktivieren)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbRTSS" Content="RTSS Prozesse beenden (kritisch fuer Mode 3/1)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
-                        <CheckBox x:Name="cbBackground" Content="Hintergrund-Apps schliessen (Chrome, Discord, Spotify, ...)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
+                        <CheckBox x:Name="cbBackground" Content="Hintergrund-Apps schliessen (Chrome, Spotify, Battle.net, Epic, OBS - Discord bleibt fuer Voice)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbTimer" Content="Timer Resolution 0.5 ms (SetTimerResolutionService - nicht im PoC)" Foreground="#6b7280" Margin="0,4" IsEnabled="False"/>
                         <CheckBox x:Name="cbLaunch" Content="PUBG via Steam direkt starten" Foreground="#e5e7eb" Margin="0,4" IsChecked="False"/>
                     </StackPanel>
