@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.8-beta'
+    Version    = '0.10.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -34,7 +34,10 @@ $Global:Suite = @{
     CapturesFile = "$env:LOCALAPPDATA\PUBGSuite\captures.json"
     MonitorIDs = "$env:LOCALAPPDATA\PUBGSuite\disabled-monitors.txt"
     NPIStamp   = "$env:LOCALAPPDATA\PUBGDiag\npi-applied.stamp"
-    DiagScript = "$env:USERPROFILE\Desktop\PUBG-Diagnose-v6.ps1"
+    # Diag-Script liegt fest neben der Suite (Repo: diagnose\PUBG-Diagnose-v6.ps1,
+    # Bootstrap-Install: %LOCALAPPDATA%\PUBGSuite\app\diagnose\PUBG-Diagnose-v6.ps1).
+    # $PSScriptRoot zeigt in beiden Faellen auf den richtigen Folder.
+    DiagScript = (Join-Path $PSScriptRoot 'diagnose\PUBG-Diagnose-v6.ps1')
     Tools = @{
         MMT  = 'C:\Tools\MultiMonitorTool\MultiMonitorTool.exe'
         NPI  = 'C:\Tools\nvidiaProfileInspector\nvidiaProfileInspector.exe'
@@ -82,9 +85,39 @@ function Save-SuiteConfig {
     }
 }
 
+function _Flatten-HistoryEntries {
+    # PS 5.1 ConvertTo-Json/ConvertFrom-Json verschachtelt bei Pipeline-Saves:
+    # [{value: [{value: [...], Count: N}, ...], Count: N}]
+    # Diese Helper unwrappt rekursiv alle {value: ...; Count: ...} Wrapper.
+    param($Items)
+    $out = @()
+    foreach ($it in @($Items)) {
+        if ($null -eq $it) { continue }
+        # Wenn das Item ein {value, Count} Wrapper ist -> rekursiv unwrappen
+        if ($it.PSObject.Properties.Name -contains 'value' -and $it.PSObject.Properties.Name -contains 'Count' -and
+            -not ($it.PSObject.Properties.Name -contains 'TweakId')) {
+            $inner = $it.value
+            if ($null -ne $inner) {
+                # Skip String-Pad-Wrapper wie {value: " ", Count: 2}
+                if ($inner -is [string]) { continue }
+                $out += (_Flatten-HistoryEntries $inner)
+            }
+            continue
+        }
+        # Echter Eintrag mit TweakId
+        if ($it.PSObject.Properties.Name -contains 'TweakId') {
+            $out += $it
+        }
+    }
+    return $out
+}
+
 function Get-HistoryEntries {
     if (Test-Path $Global:Suite.HistoryFile) {
-        try { return @(Get-Content $Global:Suite.HistoryFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return @() }
+        try {
+            $raw = Get-Content $Global:Suite.HistoryFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            return @(_Flatten-HistoryEntries $raw)
+        } catch { return @() }
     }
     return @()
 }
@@ -109,7 +142,12 @@ function Add-HistoryEntry {
         }
         # Cap auf letzte 500 Entries damit das File nicht endlos waechst
         if ($entries.Count -gt 500) { $entries = $entries[-500..-1] }
-        $entries | ConvertTo-Json -Depth 8 | Set-Content -Path $Global:Suite.HistoryFile -Encoding UTF8
+        # KEIN Pipeline-Save (PS 5.1 unwrappt size=1 zu Object): -InputObject + manual array-wrap
+        $json = ConvertTo-Json -InputObject $entries -Depth 8
+        if ($entries.Count -eq 1 -and -not $json.TrimStart().StartsWith('[')) {
+            $json = "[`r`n$json`r`n]"
+        }
+        Set-Content -Path $Global:Suite.HistoryFile -Value $json -Encoding UTF8
     } catch {
         Write-SuiteLog "History-Save Fehler: $($_.Exception.Message)" 'ERROR'
     }
@@ -271,6 +309,41 @@ function Get-LiveStatus {
     # PUBG laeuft?
     $pubg = @(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue)
     $s['PUBG'] = if ($pubg.Count -gt 0) { @{ Value="laeuft (PID $($pubg[0].Id))"; Status='INFO' } } else { @{ Value='nicht aktiv'; Status='INFO' } }
+
+    # GPU (dedicated, ohne iGPU)
+    try {
+        $gpu = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'NVIDIA|GeForce|RTX|GTX|Quadro|Radeon RX|Radeon Pro' -and $_.Name -notmatch 'Vega.*Graphics|Radeon.*Graphics$|UHD|Iris|HD Graphics' } |
+            Select-Object -First 1
+        $s['GPU'] = if ($gpu) { @{ Value=($gpu.Name -replace 'NVIDIA GeForce ','' -replace 'AMD ',''); Status='INFO' } } else { @{ Value='?'; Status='SKIP' } }
+    } catch { $s['GPU'] = @{ Value='?'; Status='SKIP' } }
+
+    # CPU - Marketing-Suffixe abkuerzen damit der Name in die Card passt
+    try {
+        $cpu = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1).Name
+        if ($cpu) {
+            $cpuShort = $cpu -replace 'Intel\(R\)\s*Core\(TM\)\s*','' `
+                              -replace 'AMD\s+','' `
+                              -replace '\s+CPU\s+@.*$','' `
+                              -replace '\s+Processor.*$','' `
+                              -replace '\s+\d+-Core.*$','' `
+                              -replace '\s{2,}',' '
+            $cpuShort = $cpuShort.Trim()
+            if ($cpuShort.Length -gt 28) { $cpuShort = $cpuShort.Substring(0,28) + '...' }
+            $s['CPU'] = @{ Value=$cpuShort; Status='INFO' }
+        } else {
+            $s['CPU'] = @{ Value='?'; Status='SKIP' }
+        }
+    } catch { $s['CPU'] = @{ Value='?'; Status='SKIP' } }
+
+    # Display: hoechste aktive Refresh-Rate als Headline
+    try {
+        $hz = (Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+            Where-Object { $_.CurrentRefreshRate -gt 0 } |
+            Sort-Object -Property CurrentRefreshRate -Descending |
+            Select-Object -First 1).CurrentRefreshRate
+        $s['Display'] = if ($hz -and $hz -gt 0) { @{ Value="$hz Hz"; Status='INFO' } } else { @{ Value='?'; Status='SKIP' } }
+    } catch { $s['Display'] = @{ Value='?'; Status='SKIP' } }
 
     return $s
 }
@@ -1240,29 +1313,39 @@ Add-Type -AssemblyName System.Windows.Forms
         </Grid.RowDefinitions>
 
         <!-- Header -->
-        <Border Grid.Row="0" Background="#1a1d23" BorderBrush="#2d3139" BorderThickness="0,0,0,1" Padding="20,12">
+        <Border Grid.Row="0" Background="#1a1d23" BorderBrush="#2d3139" BorderThickness="0,0,0,1" Padding="20,10">
             <Grid>
-                <StackPanel HorizontalAlignment="Left">
-                    <TextBlock Text="PUBG PERFORMANCE SUITE" FontSize="18" FontWeight="Bold" Foreground="#60a5fa"/>
-                    <TextBlock x:Name="lblVersion" Text="v1.0.0-PoC" FontSize="11" Foreground="#6b7280"/>
+                <StackPanel HorizontalAlignment="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="PUBG PERFORMANCE SUITE" FontSize="17" FontWeight="Bold" Foreground="#60a5fa" VerticalAlignment="Center"/>
+                    <Border Background="#0f1115" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="lblVersion" Text="v?" FontSize="10" Foreground="#9ca3af" FontWeight="SemiBold"/>
+                    </Border>
                 </StackPanel>
-                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <Border x:Name="adminBadge" Background="#374151" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,8,0">
                         <TextBlock x:Name="lblAdmin" Text="Admin: ?" Foreground="#e5e7eb" FontSize="10" FontWeight="SemiBold"/>
                     </Border>
-                    <TextBlock x:Name="lblTopStatus" Text="" Foreground="#9ca3af" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                    <Button x:Name="btnRefresh" Content="Refresh" Width="100"/>
+                    <Border Background="#0f1115" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Status: " Foreground="#9ca3af" FontSize="11" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="lblTopStatus" Text="-/-" Foreground="#e5e7eb" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <Button x:Name="btnRefresh" Content="↻ Refresh" Width="100"/>
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- Tabs -->
-        <TabControl Grid.Row="1" Background="#0f1115" BorderThickness="0" Padding="0">
+        <TabControl x:Name="mainTabs" Grid.Row="1" Background="#0f1115" BorderThickness="0" Padding="0">
             <!-- TAB 1: DASHBOARD -->
             <TabItem Header="Dashboard">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Background="#0f1115">
                     <StackPanel Margin="20">
-                        <TextBlock Text="Live Status" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" Margin="0,0,0,10"/>
+                        <Grid Margin="0,0,0,10">
+                            <TextBlock Text="Live Status" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" HorizontalAlignment="Left"/>
+                            <TextBlock x:Name="lblStatusSubtitle" Text="" FontSize="11" Foreground="#6b7280" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
                         <ItemsControl x:Name="statusItems">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -1274,7 +1357,7 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <Border Background="#1a1d23" BorderBrush="{Binding BorderColor}" BorderThickness="0,0,0,3" Padding="14,10" Margin="6" CornerRadius="3">
                                         <StackPanel>
                                             <TextBlock Text="{Binding Label}" Foreground="#9ca3af" FontSize="11"/>
-                                            <TextBlock Text="{Binding Value}" Foreground="{Binding TextColor}" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                            <TextBlock Text="{Binding Value}" Foreground="{Binding TextColor}" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
@@ -1292,8 +1375,9 @@ Add-Type -AssemblyName System.Windows.Forms
                         </Grid>
 
                         <TextBlock Text="Empfehlungen" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" Margin="0,24,0,10"/>
-                        <Border Background="#1a1d23" Padding="14" CornerRadius="4">
-                            <TextBlock x:Name="lblRecommendations" Text="Klick auf 'Run Diagnose' im naechsten Tab fuer detaillierte Analyse." Foreground="#e5e7eb" TextWrapping="Wrap"/>
+                        <StackPanel x:Name="recoList"/>
+                        <Border x:Name="recoEmptyState" Background="#0f3a23" BorderBrush="#4ade80" BorderThickness="0,0,0,2" Padding="14,10" CornerRadius="3" Visibility="Collapsed">
+                            <TextBlock Text="✓ Alle Live-Checks gruen. Setup ist sauber - viel Erfolg im Match." Foreground="#4ade80" FontWeight="SemiBold"/>
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
@@ -1722,7 +1806,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 
 # Control-Refs
 $ctrls = @{}
-foreach ($name in @('lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblRecommendations','btnStartGameMode','btnExitGameMode',
+foreach ($name in @('mainTabs','lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblStatusSubtitle','recoList','recoEmptyState','btnStartGameMode','btnExitGameMode',
     'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
     'btnFilterAll','btnFilterOpen','btnFilterDone',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
@@ -1763,30 +1847,106 @@ function Update-StatusGrid {
     }
     $ctrls.statusItems.ItemsSource = $items
 
-    # Recommendation logic
+    # Recommendation-Engine: pro Befund eine visuelle Card mit Severity + Tab-Sprung
+    # Tab-Index: 0=Dashboard, 1=Tweaks, 2=Game Mode, 3=Capture, 4=Diagnose, 5=Settings (nach Reorder)
     $recos = @()
-    if ($live['HVCI'].Status -ne 'OK') { $recos += 'HVCI ist AN - Memory Integrity deaktivieren (groesster FPS-Hebel)' }
-    if ($live['Energieplan'].Status -ne 'OK') { $recos += 'Energieplan: auf Hoechstleistung wechseln' }
-    if ($live['GameDVR'].Status -ne 'OK') { $recos += 'Xbox Game DVR: AUSSCHALTEN' }
-    if ($live['RTSS'].Status -ne 'OK') { $recos += 'RTSS laeuft - vor PUBG-Start killen (sonst Mode 5)' }
-    if ($live['Monitore'].Status -ne 'OK') { $recos += "Multi-Monitor aktiv - vor PUBG nur OLED aktivieren" }
-    if ($live['Engine.ini'].Status -ne 'OK') { $recos += 'PUBG Engine.ini Tweaks fehlen - Diagnose laufen lassen + Auto-Fix' }
-    if ($live['NV Profil'].Status -ne 'OK') { $recos += 'NVIDIA Profile noch nicht via NPI gesetzt' }
+    if ($live['HVCI'].Status -ne 'OK')         { $recos += @{ Sev='BAD';  Title='HVCI ist AN'; Detail='Memory Integrity deaktivieren - groesster FPS-Hebel (~5-15 FPS). Tweak: "HVCI Disable"'; TabIdx=1 } }
+    if ($live['Energieplan'].Status -ne 'OK')  { $recos += @{ Sev='WARN'; Title='Energieplan nicht Maximum'; Detail='Auf Hoechstleistung wechseln - haelt CPU-Frequenz auf Vollgas'; TabIdx=1 } }
+    if ($live['GameDVR'].Status -ne 'OK')      { $recos += @{ Sev='BAD';  Title='Xbox Game DVR ist AN'; Detail='Game Bar Recording laeuft im Hintergrund mit. Tweak: "Game DVR AUS"'; TabIdx=1 } }
+    if ($live['RTSS'].Status -ne 'OK')         { $recos += @{ Sev='WARN'; Title='RTSS laeuft'; Detail='Erzwingt Present-Mode 5 (Composed Copy, ~3-5ms Overhead). Game-Mode-Start killt es automatisch'; TabIdx=2 } }
+    if ($live['Monitore'].Status -ne 'OK')     { $recos += @{ Sev='WARN'; Title='Multi-Monitor aktiv'; Detail='Verhindert Hardware Independent Flip. Game Mode deaktiviert Sekundaer-Monitore'; TabIdx=2 } }
+    if ($live['Engine.ini'].Status -ne 'OK')   { $recos += @{ Sev='WARN'; Title='Engine.ini Tweaks fehlen'; Detail='Sharpen + Streaming + Pacing nicht gesetzt. Tweak: "Engine.ini Tweaks"'; TabIdx=1 } }
+    if ($live['NV Profil'].Status -ne 'OK')    { $recos += @{ Sev='WARN'; Title='NVIDIA Profile nicht applied'; Detail='Reflex + Power Mgmt + Threaded Optim. nicht via NPI gesetzt. Tweak: "NVIDIA Profile"'; TabIdx=1 } }
+    if ($live['Defender'].Status -eq 'WARN')   { $recos += @{ Sev='WARN'; Title='Defender ohne PUBG-Exclusion'; Detail='Realtime-Scan auf PUBG-Files kostet I/O. Tweak: "Defender Exclusion"'; TabIdx=1 } }
 
+    $ctrls.recoList.Children.Clear()
     if ($recos.Count -eq 0) {
-        $ctrls.lblRecommendations.Text = "✓ Alle Live-Checks gruen. Setup ist auf einem guten Stand."
-        $ctrls.lblRecommendations.Foreground = '#4ade80'
+        $ctrls.recoEmptyState.Visibility = 'Visible'
     } else {
-        $ctrls.lblRecommendations.Text = "⚠ " + ($recos -join "`n⚠ ")
-        $ctrls.lblRecommendations.Foreground = '#fbbf24'
+        $ctrls.recoEmptyState.Visibility = 'Collapsed'
+        foreach ($r in $recos) {
+            $border = New-Object System.Windows.Controls.Border
+            $border.Background = '#1a1d23'
+            $border.BorderBrush = if ($r.Sev -eq 'BAD') { '#f87171' } else { '#fbbf24' }
+            $border.BorderThickness = New-Object System.Windows.Thickness 0,0,0,2
+            $border.CornerRadius = New-Object System.Windows.CornerRadius 3
+            $border.Padding = New-Object System.Windows.Thickness 12,8,12,8
+            $border.Margin = New-Object System.Windows.Thickness 0,0,0,4
+
+            $grid = New-Object System.Windows.Controls.Grid
+            $border.Child = $grid
+            $colMain = New-Object System.Windows.Controls.ColumnDefinition; $colMain.Width = '*'; $grid.ColumnDefinitions.Add($colMain) | Out-Null
+            $colBtn  = New-Object System.Windows.Controls.ColumnDefinition; $colBtn.Width  = 'Auto'; $grid.ColumnDefinitions.Add($colBtn)  | Out-Null
+
+            $sp = New-Object System.Windows.Controls.StackPanel
+            [System.Windows.Controls.Grid]::SetColumn($sp, 0)
+            $grid.Children.Add($sp) | Out-Null
+
+            $sevIcon = if ($r.Sev -eq 'BAD') { '⚠' } else { '!' }
+            $sevColor = if ($r.Sev -eq 'BAD') { '#f87171' } else { '#fbbf24' }
+
+            $titleSp = New-Object System.Windows.Controls.StackPanel
+            $titleSp.Orientation = 'Horizontal'
+            $tbIcon = New-Object System.Windows.Controls.TextBlock
+            $tbIcon.Text = $sevIcon; $tbIcon.Foreground = $sevColor; $tbIcon.FontWeight = 'Bold'; $tbIcon.FontSize = 13
+            $tbIcon.Margin = New-Object System.Windows.Thickness 0,0,6,0
+            $titleSp.Children.Add($tbIcon) | Out-Null
+            $tbTitle = New-Object System.Windows.Controls.TextBlock
+            $tbTitle.Text = $r.Title; $tbTitle.Foreground = '#e5e7eb'; $tbTitle.FontWeight = 'SemiBold'; $tbTitle.FontSize = 12
+            $titleSp.Children.Add($tbTitle) | Out-Null
+            $sp.Children.Add($titleSp) | Out-Null
+
+            $tbDetail = New-Object System.Windows.Controls.TextBlock
+            $tbDetail.Text = $r.Detail; $tbDetail.Foreground = '#9ca3af'; $tbDetail.FontSize = 11
+            $tbDetail.TextWrapping = 'Wrap'; $tbDetail.Margin = New-Object System.Windows.Thickness 18,2,0,0
+            $sp.Children.Add($tbDetail) | Out-Null
+
+            $btnGo = New-Object System.Windows.Controls.Button
+            $btnGo.Content = 'Fix ->'
+            $btnGo.Width = 70; $btnGo.Height = 26; $btnGo.VerticalAlignment = 'Center'
+            $btnGo.Tag = $r.TabIdx
+            [System.Windows.Controls.Grid]::SetColumn($btnGo, 1)
+            $btnGo.Add_Click({
+                $targetIdx = [int]$this.Tag
+                if ($ctrls.mainTabs.Items.Count -gt $targetIdx) {
+                    $ctrls.mainTabs.SelectedIndex = $targetIdx
+                }
+            })
+            $grid.Children.Add($btnGo) | Out-Null
+
+            $ctrls.recoList.Children.Add($border) | Out-Null
+        }
     }
 
-    # Top-Status
-    $okCount = @($live.Values | Where-Object { $_.Status -eq 'OK' }).Count
-    $totalCount = @($live.Values).Count
+    # Top-Status: nur Tweak-relevante Checks zaehlen, nicht INFO (PUBG/GPU/CPU/Display)
+    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender')
+    $okCount = 0; $totalCount = 0
+    foreach ($k in $tweakKeys) {
+        if ($live[$k]) {
+            $totalCount++
+            if ($live[$k].Status -eq 'OK') { $okCount++ }
+        }
+    }
     $ctrls.lblTopStatus.Text = "$okCount / $totalCount OK"
+    if ($ctrls.lblStatusSubtitle) {
+        $ctrls.lblStatusSubtitle.Text = "Letzte Aktualisierung: $(Get-Date -Format 'HH:mm:ss')"
+    }
 
-    $ctrls.lblFooter.Text = "Status aktualisiert: $(Get-Date -Format 'HH:mm:ss')"
+    # Footer: erweiterte Info-Zeile
+    $lastApply = ''
+    try {
+        $hist = @(Get-HistoryEntries)
+        $lastApplyEntry = $hist | Where-Object { $_.Action -eq 'Apply' -and $_.Success } | Select-Object -Last 1
+        if ($lastApplyEntry -and $lastApplyEntry.Time) {
+            try {
+                $dt = [datetime]::Parse($lastApplyEntry.Time)
+                $lastApply = "Letzter Apply: $($lastApplyEntry.TweakId) ($($dt.ToString('HH:mm')))"
+            } catch { $lastApply = "Letzter Apply: $($lastApplyEntry.TweakId)" }
+        }
+    } catch {}
+    $footerParts = @("Status: $(Get-Date -Format 'HH:mm:ss')")
+    if ($lastApply) { $footerParts += $lastApply }
+    $ctrls.lblFooter.Text = ($footerParts -join '   |   ')
 }
 
 function Write-GMLog {
@@ -1837,14 +1997,16 @@ $ctrls.btnGMExit.Add_Click({
 })
 
 $ctrls.btnRunDiag.Add_Click({
-    if (-not (Test-Path $Global:Suite.DiagScript)) {
-        Write-DiagLog "FEHLER: $($Global:Suite.DiagScript) nicht gefunden"
-        Write-DiagLog "Bitte PUBG-Diagnose-v6.ps1 auf Desktop legen"
+    $diag = $Global:Suite.DiagScript
+    if (-not (Test-Path $diag)) {
+        Write-DiagLog "FEHLER: $diag nicht gefunden"
+        Write-DiagLog "Das Script gehoert zur Suite und sollte automatisch dabei sein."
+        Write-DiagLog "Fix: 'irm \"https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1\" | iex' erneut ausfuehren - der Bootstrap holt das komplette Repo (inkl. diagnose\\-Ordner) neu."
         return
     }
     Write-DiagLog "Starte v6-Diagnose in separatem Fenster (NonInteractive Mode)..."
     Write-DiagLog "Interaktive Fix-Phase wird uebersprungen - Tweaks werden im Tab 'Tweaks' verwaltet"
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$($Global:Suite.DiagScript)`" -NonInteractive"
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$diag`" -NonInteractive"
     Write-DiagLog "Fenster sollte aufgegangen sein. Nach Abschluss: 'Open Last Report' klicken."
 })
 
@@ -2008,9 +2170,10 @@ function Update-MonitorList {
     }
 }
 
+$diagStatus = if (Test-Path $Global:Suite.DiagScript) { 'OK' } else { 'FEHLT - irm|iex neu ausfuehren' }
 $ctrls.lblPaths.Text = @"
 StateDir:    $($Global:Suite.StateDir)
-DiagScript:  $($Global:Suite.DiagScript)
+DiagScript:  $($Global:Suite.DiagScript)  [$diagStatus]
 MMT:         $($Global:Suite.Tools.MMT)
 NPI:         $($Global:Suite.Tools.NPI)
 PresentMon:  $($Global:Suite.Tools.PM)
@@ -3437,6 +3600,23 @@ try {
     Write-SuiteLog "Suite gestartet (Admin: $isAdmin, MonitorPattern: $($Global:Suite.MonitorPattern))"
 } catch {
     Write-SuiteLog "Config-Load Fehler: $($_.Exception.Message)" 'WARN'
+}
+
+# Tab-Reihenfolge fuer User-Journey: Dashboard -> Tweaks -> Game Mode -> Capture -> Diagnose -> Settings
+# XAML-Order ist: 0=Dashboard, 1=Diagnose, 2=Capture, 3=Game Mode, 4=Tweaks, 5=Settings
+# Wir verschieben Items per Code (kein 700-Zeilen XAML-Move).
+try {
+    $tabsCol = $ctrls.mainTabs.Items
+    # Tweaks (idx 4) -> position 1
+    $tw = $tabsCol[4]; $tabsCol.RemoveAt(4); $tabsCol.Insert(1, $tw)
+    # Game Mode (jetzt idx 4) -> position 2
+    $gm = $tabsCol[4]; $tabsCol.RemoveAt(4); $tabsCol.Insert(2, $gm)
+    # Capture (jetzt idx 4) -> position 3
+    $cp = $tabsCol[4]; $tabsCol.RemoveAt(4); $tabsCol.Insert(3, $cp)
+    # Final: 0=Dashboard, 1=Tweaks, 2=Game Mode, 3=Capture, 4=Diagnose, 5=Settings
+    $ctrls.mainTabs.SelectedIndex = 0
+} catch {
+    Write-SuiteLog "Tab-Reorder fehlgeschlagen: $($_.Exception.Message)" 'WARN'
 }
 
 # Initial Status

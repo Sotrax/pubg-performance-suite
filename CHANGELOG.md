@@ -14,6 +14,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.10.0-beta] - 2026-05-12
+### Changed — Dashboard- und UX-Overhaul
+
+**Tab-Reihenfolge an User-Journey angepasst:**
+- Alt: Dashboard -> Diagnose -> Capture -> Game Mode -> Tweaks -> Settings
+- Neu: **Dashboard -> Tweaks -> Game Mode -> Capture -> Diagnose -> Settings**
+- Reasoning: Status sehen -> direkt fixen -> Spielen vorbereiten -> Performance messen -> Tiefe-Analyse nur bei Bedarf -> Settings ganz hinten weil selten gebraucht
+- Implementation: Reorder per `$ctrls.mainTabs.Items.RemoveAt/Insert` nach Window-Load statt 700-Zeilen-XAML-Block-Move
+
+**Dashboard: 4x3 Grid komplett ausgefuellt (12 Cards statt 9)**
+- 3 neue Info-Cards (Status='INFO', neutraler blauer Border):
+  - **GPU**: Name der dedizierten Karte (iGPU wird gefiltert), Marketing-Praefix entfernt (`RTX 5080` statt `NVIDIA GeForce RTX 5080`)
+  - **CPU**: Name mit gekuerzten Marketing-Suffixen (`Ryzen 9 7950X3D` statt `AMD Ryzen 9 7950X3D 16-Core Processor`)
+  - **Display**: Hoechste aktive Refresh-Rate als Headline (`240 Hz`)
+- Reihen: HVCI/Energieplan/GameDVR/Monitore - RTSS/Engine.ini/NV Profil/Defender - PUBG/GPU/CPU/Display
+- Keine leeren Zellen mehr
+
+**Empfehlungen visualisiert:**
+- Alt: Ein TextBlock mit "Bla, Bla, Bla" als Liste
+- Neu: Pro Befund eine eigene Card mit:
+  - Severity-Icon (`⚠` rot fuer BAD-Findings, `!` gelb fuer WARN)
+  - Klarer Titel + Detail-Erklaerung warum es relevant ist
+  - Rechts ein **"Fix ->" Button** der direkt in den passenden Tab springt (Tweaks oder Game Mode)
+- "Alles gruen"-Empty-State als gruene Bestaetigungs-Card
+
+**Header gestrafft:**
+- Subtitle "v0.9.x-beta" unter dem Logo entfernt (war doppelt mit der Titelleiste)
+- Version jetzt als kompakter Badge neben dem Suite-Namen
+- "X/Y OK" hat jetzt das Label "Status:" davor und ist in einem dunklen Pill-Badge eingefasst
+- Refresh-Button mit Refresh-Symbol vorangestellt
+- Top-Status zaehlt nur die 8 Tweak-relevanten Checks (nicht die INFO-Cards GPU/CPU/Display/PUBG)
+
+**Footer erweitert:**
+- Zeigt jetzt: Letzte Aktualisierung + letzter erfolgreich applied'er Tweak mit Zeitstempel (z.B. `Status: 19:14:30   |   Letzter Apply: engineini (16:15)`)
+- "Letzte Aktualisierung"-Subtitle auch oben im Dashboard rechts neben "Live Status"-Header
+
+## [0.9.9-beta] - 2026-05-12
+### Fixed — Diagnose-Tab "PUBG-Diagnose-v6.ps1 nicht gefunden"
+- DiagScript-Pfad war hardcoded auf `$env:USERPROFILE\Desktop\PUBG-Diagnose-v6.ps1` - das ist die Pre-Bootstrap-Annahme aus den ersten Suite-Iterationen
+- Bootstrap (`launch.ps1`) entpackt das Repo nach `%LOCALAPPDATA%\PUBGSuite\app\` mit Sub-Folder `diagnose\PUBG-Diagnose-v6.ps1` - die Suite hat dort nie reingeguckt, obwohl das Script Teil der Installation ist
+- Fix: DiagScript zeigt jetzt fest auf `Join-Path $PSScriptRoot 'diagnose\PUBG-Diagnose-v6.ps1'`. Das funktioniert in beiden Layouts (Repo-Dev-Run + Bootstrap-Install) ohne Such-Logik
+- Settings-Tab zeigt den Pfad + Status `[OK]` oder `[FEHLT - irm|iex neu ausfuehren]`
+- Bei Klick auf "Run Full Diagnose" mit fehlendem Script: klare Fehlermeldung mit exaktem `irm | iex` Command zum Reparieren
+
+### Fixed — history.json Verschachtelung (selber Bug wie damals captures.json)
+- `history.json` wurde bei jedem `Add-HistoryEntry` eine Ebene tiefer verschachtelt: `[{value: [{value: [{value: [...], Count: N}, ...], Count: N}, ...]}]`
+- Ursache: `$entries | ConvertTo-Json` (Pipeline) + `Get-Content | ConvertFrom-Json` Roundtrip - PS 5.1 unwrappt Arrays mit 1 Element zu PSCustomObject, beim naechsten Save wird das wieder gewrappt
+- Konsequenz: `Get-LastSnapshot` haette irgendwann nicht mehr den passenden Snapshot fuer Revert gefunden, weil die echten Eintraege immer tiefer in `{value: ...}`-Wrappern lagen
+- Fix: `ConvertTo-Json -InputObject` (kein Pipeline) + manual `[`/`]` Wrap bei size=1, analog zur captures.json-Fix in 0.9.5-beta
+- Recovery: `_Flatten-HistoryEntries` Helper unwrappt rekursiv alle `{value, Count}` Wrapper beim Lesen - alte verschachtelte history.json wird automatisch repariert
+
 ## [0.9.8-beta] - 2026-05-12
 ### Fixed — Bug-Bash nach User-Feedback "tweaks fehlen jedes mal nach Apply"
 
