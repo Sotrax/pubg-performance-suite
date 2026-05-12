@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.1-beta'
+    Version    = '0.9.2-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1319,8 +1319,10 @@ Add-Type -AssemblyName System.Windows.Forms
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                    <Button x:Name="btnCapOpenCsv" Content="Open last CSV" Width="160" Margin="0,0,8,0"/>
-                                    <Button x:Name="btnCapOpenFolder" Content="Open Captures Folder" Width="180"/>
+                                    <Button x:Name="btnCapOpenCsv" Content="Open last CSV" Width="140" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnCapOpenFolder" Content="Open Folder" Width="120" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnCapCompare" Content="Compare to previous" Width="180" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnCapClearHist" Content="Clear history" Width="140" Style="{StaticResource DangerButton}"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -1508,7 +1510,7 @@ foreach ($name in @('lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefr
     'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
     'lblCapLastInfo','capResultGrid','lblCapAvg','lblCap1Low','lblCap01Low','lblCapStdDev',
     'lblCapPresentMode','lblCapGSync','lblCapStutter',
-    'btnCapOpenCsv','btnCapOpenFolder','lblCapHistInfo','capHistoryList',
+    'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapClearHist','lblCapHistInfo','capHistoryList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
     'lblPaths','tbMonitorPattern','lblFooter')) {
@@ -2360,12 +2362,14 @@ function Update-CapToolStatus {
 function Show-CapResult {
     param($Result)
     if (-not $Result -or $Result.Error) {
-        $ctrls.lblCapLastInfo.Text = "Fehler: $($Result.Error)"
+        $errMsg = if ($Result) { $Result.Error } else { 'unbekannt' }
+        $ctrls.lblCapLastInfo.Text = "Fehler: $errMsg"
         $ctrls.lblCapLastInfo.Foreground = '#f87171'
         $ctrls.capResultGrid.Visibility = 'Collapsed'
         return
     }
-    $ctrls.lblCapLastInfo.Text = "$($Result.CaptureTime)  -  $($Result.Frames) Frames in $($Result.DurationSec)s  -  $($Result.FileName)"
+    $timeStr = if ($Result.CaptureTime -is [datetime]) { $Result.CaptureTime.ToString('yyyy-MM-dd HH:mm:ss') } else { [string]$Result.CaptureTime }
+    $ctrls.lblCapLastInfo.Text = "$timeStr  -  $($Result.Frames) Frames in $($Result.DurationSec)s  -  $($Result.FileName)"
     $ctrls.lblCapLastInfo.Foreground = '#9ca3af'
     $ctrls.capResultGrid.Visibility = 'Visible'
 
@@ -2395,64 +2399,129 @@ function Show-CapResult {
     $ctrls.lblCapStutter.Foreground = if ($Result.StutterPct -lt 0.2) { '#4ade80' } elseif ($Result.StutterPct -lt 0.5) { '#fbbf24' } else { '#f87171' }
 }
 
+function Format-CapTimeShort {
+    param($Val)
+    # Robuste Konvertierung egal ob String oder DateTime (PowerShell-JSON-Quirks)
+    if ($null -eq $Val) { return '?' }
+    $s = if ($Val -is [datetime]) {
+        $Val.ToString('yyyy-MM-dd HH:mm:ss')
+    } else {
+        [string]$Val
+    }
+    if ($s.Length -ge 16) {
+        return $s.Substring(5, 11)  # "MM-dd HH:mm"
+    }
+    return $s
+}
+
 function Update-CapHistory {
-    $ctrls.capHistoryList.Children.Clear()
-    $hist = @(Get-CaptureHistory)
-    if ($hist.Count -eq 0) {
-        $ctrls.lblCapHistInfo.Text = 'Keine Trend-Daten - mache mind. 2 Messungen zum Vergleich.'
-        return
-    }
-    $ctrls.lblCapHistInfo.Text = "$($hist.Count) Messung(en) gespeichert - Top 8 angezeigt"
+    try {
+        $ctrls.capHistoryList.Children.Clear()
+        $hist = @(Get-CaptureHistory)
+        if ($hist.Count -eq 0) {
+            $ctrls.lblCapHistInfo.Text = 'Keine Trend-Daten - mache mind. 2 Messungen zum Vergleich.'
+            return
+        }
+        $ctrls.lblCapHistInfo.Text = "$($hist.Count) Messung(en) gespeichert - Top 8 angezeigt. Klick auf eine Zeile = CSV oeffnen."
 
-    # Header-Row
-    $hdr = New-Object System.Windows.Controls.Border
-    $hdr.Background = '#0f1115'; $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
-    $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
-    $hdrGrid = New-Object System.Windows.Controls.Grid
-    $hdr.Child = $hdrGrid
-    foreach ($w in 130,60,60,60,55,90) {
-        $cd = New-Object System.Windows.Controls.ColumnDefinition
-        $cd.Width = $w; $hdrGrid.ColumnDefinitions.Add($cd) | Out-Null
-    }
-    $hdrTexts = @('DATE/TIME','AVG','1%','0.1%','STDEV','MODE')
-    for ($i = 0; $i -lt $hdrTexts.Count; $i++) {
-        $tb = New-Object System.Windows.Controls.TextBlock
-        $tb.Text = $hdrTexts[$i]; $tb.Foreground = '#9ca3af'; $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
-        [System.Windows.Controls.Grid]::SetColumn($tb, $i)
-        $hdrGrid.Children.Add($tb) | Out-Null
-    }
-    $ctrls.capHistoryList.Children.Add($hdr) | Out-Null
-
-    # Bis zu 8 letzte Einträge, neueste zuerst
-    $recent = @($hist | Select-Object -Last 8) | Sort-Object -Property CaptureTime -Descending
-    foreach ($e in $recent) {
-        $row = New-Object System.Windows.Controls.Border
-        $row.Background = '#1a1d23'; $row.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
-        $row.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
-        $row.CornerRadius = (New-Object System.Windows.CornerRadius 2)
-        $grid = New-Object System.Windows.Controls.Grid
-        $row.Child = $grid
-        foreach ($w in 130,60,60,60,55,90) {
+        # Header-Row
+        $hdr = New-Object System.Windows.Controls.Border
+        $hdr.Background = '#0f1115'; $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+        $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
+        $hdrGrid = New-Object System.Windows.Controls.Grid
+        $hdr.Child = $hdrGrid
+        foreach ($w in 110,55,55,55,55,80,80) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
-            $cd.Width = $w; $grid.ColumnDefinitions.Add($cd) | Out-Null
+            $cd.Width = $w; $hdrGrid.ColumnDefinitions.Add($cd) | Out-Null
         }
-        $vals = @(
-            $e.CaptureTime.Substring(5,11),
-            "$($e.AvgFps)",
-            "$($e.OnePctLow)",
-            "$($e.ZeroOnePctLow)",
-            "$($e.StdDevMs)",
-            $(if ($e.PresentMode) { "Mode $($e.PresentMode)" } else { '?' })
-        )
-        $cols = @('#d1d5db','#4ade80','#fbbf24','#f87171','#60a5fa','#e5e7eb')
-        for ($i = 0; $i -lt 6; $i++) {
+        $hdrTexts = @('DATE/TIME','AVG','1%','0.1%','STDEV','MODE','DELTA')
+        for ($i = 0; $i -lt $hdrTexts.Count; $i++) {
             $tb = New-Object System.Windows.Controls.TextBlock
-            $tb.Text = "$($vals[$i])"; $tb.Foreground = $cols[$i]; $tb.FontSize = 11
-            $tb.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
+            $tb.Text = $hdrTexts[$i]; $tb.Foreground = '#9ca3af'; $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
             [System.Windows.Controls.Grid]::SetColumn($tb, $i)
-            $grid.Children.Add($tb) | Out-Null
+            $hdrGrid.Children.Add($tb) | Out-Null
         }
-        $ctrls.capHistoryList.Children.Add($row) | Out-Null
+        $ctrls.capHistoryList.Children.Add($hdr) | Out-Null
+
+        # Letzte 8, neueste zuerst (Display)
+        $recent = @($hist | Select-Object -Last 8)
+        # Sortieren ueber CaptureTime - tolerant gegen String/DateTime
+        $recent = @($recent | Sort-Object -Property @{ Expression = {
+            try {
+                if ($_.CaptureTime -is [datetime]) { $_.CaptureTime } else { [datetime]::Parse($_.CaptureTime) }
+            } catch { [datetime]::MinValue }
+        }} -Descending)
+
+        # Baseline = aelteste der angezeigten (letzter Eintrag nach Sortierung)
+        $baseline = $recent[-1]
+        $baselineAvg = if ($baseline -and $null -ne $baseline.AvgFps) { [double]$baseline.AvgFps } else { 0 }
+
+        foreach ($e in $recent) {
+            try {
+                $row = New-Object System.Windows.Controls.Border
+                $row.Background = '#1a1d23'; $row.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+                $row.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
+                $row.CornerRadius = (New-Object System.Windows.CornerRadius 2)
+                $row.Cursor = [System.Windows.Input.Cursors]::Hand
+                $row.Tag = $e.CsvPath
+
+                $grid = New-Object System.Windows.Controls.Grid
+                $row.Child = $grid
+                foreach ($w in 110,55,55,55,55,80,80) {
+                    $cd = New-Object System.Windows.Controls.ColumnDefinition
+                    $cd.Width = $w; $grid.ColumnDefinitions.Add($cd) | Out-Null
+                }
+
+                # Delta vs Baseline berechnen
+                $delta = ''; $deltaColor = '#9ca3af'
+                if ($baselineAvg -gt 0 -and $null -ne $e.AvgFps -and $e -ne $baseline) {
+                    $diff = [double]$e.AvgFps - $baselineAvg
+                    $sign = if ($diff -ge 0) { '+' } else { '' }
+                    $delta = "$sign$([math]::Round($diff, 1))"
+                    if ($diff -gt 2) { $deltaColor = '#4ade80' }
+                    elseif ($diff -lt -2) { $deltaColor = '#f87171' }
+                    else { $deltaColor = '#fbbf24' }
+                }
+
+                $vals = @(
+                    (Format-CapTimeShort $e.CaptureTime),
+                    "$($e.AvgFps)",
+                    "$($e.OnePctLow)",
+                    "$($e.ZeroOnePctLow)",
+                    "$($e.StdDevMs)",
+                    $(if ($e.PresentMode) { "Mode $($e.PresentMode)" } else { '?' }),
+                    $delta
+                )
+                $cols = @('#d1d5db','#4ade80','#fbbf24','#f87171','#60a5fa','#e5e7eb',$deltaColor)
+                for ($i = 0; $i -lt 7; $i++) {
+                    $tb = New-Object System.Windows.Controls.TextBlock
+                    $tb.Text = "$($vals[$i])"; $tb.Foreground = $cols[$i]; $tb.FontSize = 11
+                    $tb.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
+                    [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+                    $grid.Children.Add($tb) | Out-Null
+                }
+
+                # Click-Handler: oeffnet CSV der Row
+                $row.Add_MouseLeftButtonUp({
+                    $csvPath = $this.Tag
+                    if ($csvPath -and (Test-Path $csvPath)) {
+                        Start-Process notepad.exe -ArgumentList $csvPath
+                    } else {
+                        [System.Windows.MessageBox]::Show("CSV nicht mehr vorhanden:`n$csvPath", 'Info', 'OK', 'Warning') | Out-Null
+                    }
+                })
+
+                # Hover-Effekt
+                $row.Add_MouseEnter({ $this.Background = '#252830' })
+                $row.Add_MouseLeave({ $this.Background = '#1a1d23' })
+
+                $ctrls.capHistoryList.Children.Add($row) | Out-Null
+            } catch {
+                Write-SuiteLog "Update-CapHistory Row-Render Fehler: $($_.Exception.Message)" 'WARN'
+            }
+        }
+    } catch {
+        Write-SuiteLog "Update-CapHistory Fehler: $($_.Exception.Message)" 'ERROR'
     }
 }
 
@@ -2522,6 +2591,7 @@ function Start-PUBGCapture {
     $timer.Add_Tick({
         try {
             $state = $Global:CaptureState
+            if (-not $state -or -not $state.IsRunning) { return }
             if ($state.Phase -eq 'countdown') {
                 if ($state.SecondsRemaining -gt 0) {
                     $ctrls.lblCapPhase.Text = "Capture startet in $($state.SecondsRemaining)s - jetzt Alt+Tab zu PUBG!"
@@ -2609,6 +2679,70 @@ $ctrls.btnCapOpenCsv.Add_Click({
 $ctrls.btnCapOpenFolder.Add_Click({
     Initialize-SuiteStorage
     Start-Process explorer.exe -ArgumentList $Global:Suite.CaptureDir
+})
+
+function Format-Delta {
+    param([double]$Current, [double]$Previous, [string]$Unit = '', [bool]$LowerIsBetter = $false)
+    if ($Previous -eq 0) { return '' }
+    $diff = $Current - $Previous
+    $pct = if ($Previous -ne 0) { ($diff / $Previous) * 100 } else { 0 }
+    $sign = if ($diff -ge 0) { '+' } else { '' }
+    $diffStr = "$sign$([math]::Round($diff, 1))$Unit"
+    $pctStr = "($sign$([math]::Round($pct, 1))%)"
+    $isPositive = if ($LowerIsBetter) { $diff -lt 0 } else { $diff -gt 0 }
+    $color = if ([math]::Abs($pct) -lt 1) { '#9ca3af' } elseif ($isPositive) { '#4ade80' } else { '#f87171' }
+    return @{ Text = "$diffStr $pctStr"; Color = $color }
+}
+
+$ctrls.btnCapCompare.Add_Click({
+    $hist = @(Get-CaptureHistory)
+    if ($hist.Count -lt 2) {
+        [System.Windows.MessageBox]::Show('Mindestens 2 Messungen noetig fuer Vergleich. Aktuell vorhanden: ' + $hist.Count, 'Compare', 'OK', 'Information') | Out-Null
+        return
+    }
+    $current = $hist[-1]
+    $previous = $hist[-2]
+
+    $deltaAvg   = Format-Delta -Current ([double]$current.AvgFps) -Previous ([double]$previous.AvgFps)
+    $delta1     = Format-Delta -Current ([double]$current.OnePctLow) -Previous ([double]$previous.OnePctLow)
+    $delta01    = Format-Delta -Current ([double]$current.ZeroOnePctLow) -Previous ([double]$previous.ZeroOnePctLow)
+    $deltaStd   = Format-Delta -Current ([double]$current.StdDevMs) -Previous ([double]$previous.StdDevMs) -Unit ' ms' -LowerIsBetter $true
+    $deltaStut  = Format-Delta -Current ([double]$current.StutterPct) -Previous ([double]$previous.StutterPct) -Unit ' %' -LowerIsBetter $true
+
+    $curTime = Format-CapTimeShort $current.CaptureTime
+    $prevTime = Format-CapTimeShort $previous.CaptureTime
+
+    $modeChange = ''
+    if ($current.PresentMode -ne $previous.PresentMode) {
+        $modeChange = "`n`nPresent Mode geaendert: $($previous.PresentMode) -> $($current.PresentMode)"
+    }
+
+    $msg = @"
+Vergleich aktuelle vs. vorherige Messung
+
+$prevTime  ->  $curTime
+
+   AVG FPS:     $($previous.AvgFps) -> $($current.AvgFps)   $($deltaAvg.Text)
+   1% Low:      $($previous.OnePctLow) -> $($current.OnePctLow)   $($delta1.Text)
+   0.1% Low:    $($previous.ZeroOnePctLow) -> $($current.ZeroOnePctLow)   $($delta01.Text)
+   StdDev:      $($previous.StdDevMs) -> $($current.StdDevMs) ms   $($deltaStd.Text)
+   Stutter:     $($previous.StutterPct) -> $($current.StutterPct) %   $($deltaStut.Text)$modeChange
+
+Tipp: gruene Deltas = Verbesserung, rote = Verschlechterung
+"@
+    [System.Windows.MessageBox]::Show($msg, 'Capture-Vergleich', 'OK', 'Information') | Out-Null
+})
+
+$ctrls.btnCapClearHist.Add_Click({
+    $confirm = [System.Windows.MessageBox]::Show("Capture-History komplett loeschen?`n`nCSV-Dateien in $($Global:Suite.CaptureDir) bleiben erhalten - nur die Trend-Daten werden gecleared.", 'History loeschen', 'YesNo', 'Warning')
+    if ($confirm -eq 'Yes') {
+        Remove-Item $Global:Suite.CapturesFile -Force -ErrorAction SilentlyContinue
+        Write-SuiteLog "Capture-History geloescht" 'INFO'
+        Update-CapHistory
+        $ctrls.capResultGrid.Visibility = 'Collapsed'
+        $ctrls.lblCapLastInfo.Text = 'History geloescht.'
+        $ctrls.lblCapLastInfo.Foreground = '#9ca3af'
+    }
 })
 
 Update-CapToolStatus

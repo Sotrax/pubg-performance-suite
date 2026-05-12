@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.2-beta] - 2026-05-12
+### Fixed
+- Capture-Tab: Timer-Tick-Fehler bei JSON-Date-Deserialisierung (CaptureTime kam teils als DateTime statt String zurueck → .Substring crashte)
+- Capture-Tab: defensive Null-Checks in Update-CapHistory; Row-Render-Fehler greppen jetzt nur die einzelne Zeile, nicht die ganze Trend-Tabelle
+- Format-CapTimeShort Helper: konvertiert robust egal welche Form (String/DateTime/null)
+
+### Added — Capture-Tab Polish
+- Trend-Tabelle: Zeilen sind jetzt klickbar - öffnet die jeweilige CSV in Notepad
+- Trend-Tabelle: Hover-Effekt (Background ändert sich)
+- Neue Spalte "DELTA" - Avg-FPS-Differenz gegen die älteste angezeigte Messung (gruen/rot)
+- Neuer Button "Compare to previous" - zeigt Side-by-Side-Vergleich der letzten zwei Messungen mit prozentualer Delta
+- Neuer Button "Clear history" - leert captures.json (CSVs bleiben auf Disk)
+
 ## [0.9.1-beta] - 2026-05-12
 ### Added — Performance Capture Tab
 - New "Capture" tab between Diagnose and Game Mode
