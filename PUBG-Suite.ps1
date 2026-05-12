@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.2-beta'
+    Version    = '0.9.3-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -2753,6 +2753,10 @@ if ($hist.Count -gt 0) {
     $Global:CaptureState.LastResult = $hist[-1]
     Show-CapResult $hist[-1]
 }
+
+# Version im Header dynamisch (aus $Global:Suite.Version statt hardcoded)
+$ctrls.lblVersion.Text = "v$($Global:Suite.Version)"
+$window.Title = "PUBG Performance Suite v$($Global:Suite.Version)"
 
 # Admin-Badge initial setzen
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

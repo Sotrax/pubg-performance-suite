@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.3-beta] - 2026-05-12
+### Fixed
+- Header-Version war seit Anfang hardcoded auf "v1.0.0-PoC" im XAML statt aus $Global:Suite.Version gelesen
+- WindowTitle bekommt jetzt auch Version-Suffix
+- Visible bug der bei jeder Version-Bump-Aktion seit 0.9.0 unsichtbar war
+
 ## [0.9.2-beta] - 2026-05-12
 ### Fixed
 - Capture-Tab: Timer-Tick-Fehler bei JSON-Date-Deserialisierung (CaptureTime kam teils als DateTime statt String zurueck → .Substring crashte)
