@@ -23,13 +23,15 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.0-beta'
+    Version    = '0.9.1-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
     HistoryFile= "$env:LOCALAPPDATA\PUBGSuite\history.json"
     LogDir     = "$env:LOCALAPPDATA\PUBGSuite\logs"
     BackupDir  = "$env:LOCALAPPDATA\PUBGSuite\backups"
+    CaptureDir = "$env:LOCALAPPDATA\PUBGSuite\captures"
+    CapturesFile = "$env:LOCALAPPDATA\PUBGSuite\captures.json"
     MonitorIDs = "$env:LOCALAPPDATA\PUBGSuite\disabled-monitors.txt"
     NPIStamp   = "$env:LOCALAPPDATA\PUBGDiag\npi-applied.stamp"
     DiagScript = "$env:USERPROFILE\Desktop\PUBG-Diagnose-v6.ps1"
@@ -44,7 +46,7 @@ $Global:Suite = @{
 
 # ==================== STORAGE LAYER (Config / Log / History) ====================
 function Initialize-SuiteStorage {
-    foreach ($d in $Global:Suite.StateDir, $Global:Suite.LogDir, $Global:Suite.BackupDir) {
+    foreach ($d in $Global:Suite.StateDir, $Global:Suite.LogDir, $Global:Suite.BackupDir, $Global:Suite.CaptureDir) {
         if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
     }
 }
@@ -1218,6 +1220,124 @@ Add-Type -AssemblyName System.Windows.Forms
                 </Grid>
             </TabItem>
 
+            <!-- TAB CAPTURE -->
+            <TabItem Header="Capture">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20">
+
+                        <!-- Status Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Performance Capture (60s)" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Foreground="#9ca3af" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
+                                    <Run Text="Misst Frametimes via Intel PresentMon - passiv via ETW, kein DLL-Hook, kein RTSS."/>
+                                    <LineBreak/>
+                                    <Run Text="Voraussetzungen: PUBG laeuft, du bist im Match. Game Mode (Monitore solo + RTSS aus) empfohlen davor."/>
+                                </TextBlock>
+
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="PresentMon: " Foreground="#e5e7eb" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" x:Name="lblCapToolStatus" Text="pruefe..." Foreground="#9ca3af" FontSize="12" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Button x:Name="btnCapStart" Content="▶ START 60s CAPTURE" Style="{StaticResource SuccessButton}" Width="220" Height="44" FontWeight="Bold"/>
+                                    <Button x:Name="btnCapStop" Content="Stop" Style="{StaticResource DangerButton}" Width="100" Height="44" Margin="8,0,0,0" IsEnabled="False"/>
+                                </StackPanel>
+
+                                <TextBlock x:Name="lblCapPhase" Text="Bereit." Foreground="#60a5fa" FontSize="12" FontWeight="SemiBold" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Last Result Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Letzte Messung" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock x:Name="lblCapLastInfo" Text="Noch keine Messung gemacht." Foreground="#9ca3af" FontSize="11" Margin="0,0,0,8"/>
+
+                                <Grid x:Name="capResultGrid" Visibility="Collapsed">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <Border Grid.Row="0" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="AVG FPS" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapAvg" Text="-" Foreground="#4ade80" FontSize="22" FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="0" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="1% LOW" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCap1Low" Text="-" Foreground="#fbbf24" FontSize="22" FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="0" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="0.1% LOW" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCap01Low" Text="-" Foreground="#f87171" FontSize="22" FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="0" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="STDDEV" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapStdDev" Text="-" Foreground="#60a5fa" FontSize="22" FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="PRESENT MODE" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="#e5e7eb" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="G-SYNC" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapGSync" Text="-" Foreground="#e5e7eb" FontSize="13" FontWeight="SemiBold"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="STUTTER" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapStutter" Text="-" Foreground="#e5e7eb" FontSize="13" FontWeight="SemiBold"/>
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button x:Name="btnCapOpenCsv" Content="Open last CSV" Width="160" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnCapOpenFolder" Content="Open Captures Folder" Width="180"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- History/Trend Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Trend (letzte Messungen)" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock x:Name="lblCapHistInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,0,0,8"/>
+                                <StackPanel x:Name="capHistoryList"/>
+                            </StackPanel>
+                        </Border>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- TAB 3: GAME MODE -->
             <TabItem Header="Game Mode">
                 <Grid Margin="20">
@@ -1385,6 +1505,10 @@ foreach ($name in @('lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefr
     'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
+    'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
+    'lblCapLastInfo','capResultGrid','lblCapAvg','lblCap1Low','lblCap01Low','lblCapStdDev',
+    'lblCapPresentMode','lblCapGSync','lblCapStutter',
+    'btnCapOpenCsv','btnCapOpenFolder','lblCapHistInfo','capHistoryList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
     'lblPaths','tbMonitorPattern','lblFooter')) {
@@ -1733,6 +1857,178 @@ $ctrls.btnAutoPattern.Add_Click({
 Update-DetectedHardware
 Update-MonitorList
 
+# ==================== PRESENTMON CAPTURE ====================
+function Get-PresentMonPath {
+    foreach ($p in @(
+        "$($Global:Suite.Tools.PM)\PresentMon-x64.exe",
+        "$($Global:Suite.Tools.PM)\PresentMon-x86.exe"
+    )) {
+        if (Test-Path $p) { return $p }
+    }
+    # Glob fuer versionierte Builds
+    if (Test-Path $Global:Suite.Tools.PM) {
+        $exes = Get-ChildItem -Path $Global:Suite.Tools.PM -Filter 'PresentMon-*.exe' -ErrorAction SilentlyContinue
+        $x64 = $exes | Where-Object { $_.Name -match 'x64' } | Select-Object -First 1
+        if ($x64) { return $x64.FullName }
+        $any = $exes | Select-Object -First 1
+        if ($any) { return $any.FullName }
+    }
+    return $null
+}
+
+function Install-PresentMonFromGitHub {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $target = $Global:Suite.Tools.PM
+    try {
+        if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+    } catch {
+        $target = Join-Path $env:USERPROFILE 'Tools\PresentMon'
+        Write-SuiteLog "PresentMon target fallback to user-profile dir: $target" 'WARN'
+        if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
+    }
+
+    Write-SuiteLog "PresentMon Download startet von GitHub..." 'INFO'
+    try {
+        $apiUrl = 'https://api.github.com/repos/GameTechDev/PresentMon/releases/latest'
+        $headers = @{ 'User-Agent' = 'PUBG-Suite' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+
+        # Suche x64 .exe Asset zuerst, dann x86, dann irgendwas
+        $asset = $release.assets | Where-Object { $_.name -match '^PresentMon-.*-x64\.exe$' } | Select-Object -First 1
+        if (-not $asset) {
+            $asset = $release.assets | Where-Object { $_.name -match '^PresentMon-.*-x86\.exe$' } | Select-Object -First 1
+        }
+        if (-not $asset) {
+            $asset = $release.assets | Where-Object { $_.name -match '^PresentMon-.*\.exe$' } | Select-Object -First 1
+        }
+        if (-not $asset) { throw 'Kein PresentMon-Asset im Release gefunden' }
+
+        $outFile = Join-Path $target $asset.name
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outFile -UseBasicParsing -ErrorAction Stop
+
+        # Single-File-Renaming-Strategie: PresentMon-x64.exe (so findet Get-PresentMonPath schneller)
+        if ($asset.name -match 'x64') {
+            $canonical = Join-Path $target 'PresentMon-x64.exe'
+            if ($outFile -ne $canonical) { Copy-Item -Path $outFile -Destination $canonical -Force }
+        }
+        Write-SuiteLog "PresentMon installiert: $outFile (Version $($release.tag_name))" 'INFO'
+        return $outFile
+    } catch {
+        Write-SuiteLog "PresentMon-Install Fehler: $($_.Exception.Message)" 'ERROR'
+        return $null
+    }
+}
+
+function Get-CaptureHistory {
+    if (Test-Path $Global:Suite.CapturesFile) {
+        try { return @(Get-Content $Global:Suite.CapturesFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return @() }
+    }
+    return @()
+}
+
+function Add-CaptureEntry {
+    param($Entry)
+    try {
+        $list = @(Get-CaptureHistory)
+        $list += $Entry
+        # Cap auf letzte 50
+        if ($list.Count -gt 50) { $list = $list[-50..-1] }
+        $list | ConvertTo-Json -Depth 8 | Set-Content -Path $Global:Suite.CapturesFile -Encoding UTF8
+    } catch {
+        Write-SuiteLog "Capture-History Save Fehler: $($_.Exception.Message)" 'ERROR'
+    }
+}
+
+function Analyze-CaptureCSV {
+    param([string]$CsvPath)
+    if (-not (Test-Path $CsvPath)) { return $null }
+    try {
+        $data = Import-Csv $CsvPath
+        if ($data.Count -lt 10) {
+            return @{ Error = "CSV zu klein ($($data.Count) Zeilen) - PUBG lief nicht?" }
+        }
+
+        $ft = @($data | ForEach-Object {
+            try { [double]$_.MsBetweenPresents } catch { 0 }
+        } | Where-Object { $_ -gt 0 })
+
+        if ($ft.Count -lt 10) {
+            return @{ Error = "Keine validen Frametimes in CSV" }
+        }
+
+        $sorted = $ft | Sort-Object
+        $n = $sorted.Count
+        $avgMs = ($ft | Measure-Object -Average).Average
+        $avgFps = [math]::Round(1000 / $avgMs, 1)
+
+        $worst1Count = [Math]::Max(1, [int]($n * 0.01))
+        $worst01Count = [Math]::Max(1, [int]($n * 0.001))
+        $worst1 = $sorted | Select-Object -Last $worst1Count
+        $worst01 = $sorted | Select-Object -Last $worst01Count
+        $onePct = [math]::Round(1000 / (($worst1 | Measure-Object -Average).Average), 1)
+        $zeroOnePct = [math]::Round(1000 / (($worst01 | Measure-Object -Average).Average), 1)
+
+        $variance = ($ft | ForEach-Object { [math]::Pow($_ - $avgMs, 2) } | Measure-Object -Sum).Sum / $n
+        $stddev = [math]::Round([math]::Sqrt($variance), 2)
+        $stutterCount = ($ft | Where-Object { $_ -gt ($avgMs * 2) }).Count
+        $stutterPct = [math]::Round(($stutterCount / $n) * 100, 2)
+
+        # PresentMode - die wahrscheinlichste Mode
+        $pmTopName = $null; $pmTopCount = 0
+        if ($data[0].PSObject.Properties.Name -contains 'PresentMode') {
+            $modeGroups = $data | Group-Object PresentMode | Sort-Object Count -Descending
+            if ($modeGroups -and $modeGroups[0]) {
+                $pmTopName = $modeGroups[0].Name
+                $pmTopCount = $modeGroups[0].Count
+            }
+        }
+        $pmNames = @{
+            '1' = 'HW Legacy Flip'
+            '2' = 'HW Legacy Copy to FrontBuffer'
+            '3' = 'HW Independent Flip (EXCLUSIVE)'
+            '4' = 'Composed Flip (Borderless Flip)'
+            '5' = 'Composed Copy GPU GDI'
+            '6' = 'Composed Copy CPU GDI'
+            '7' = 'Composition Atlas'
+        }
+        $modeLabel = if ($pmTopName -and $pmNames.ContainsKey($pmTopName)) { "$pmTopName - $($pmNames[$pmTopName])" } elseif ($pmTopName) { "Mode $pmTopName" } else { 'unbekannt' }
+        $modeQuality = switch ($pmTopName) {
+            '1' { 'OK' }
+            '3' { 'OK' }
+            '4' { 'OK' }
+            '5' { 'BAD' }
+            '6' { 'BAD' }
+            default { 'WARN' }
+        }
+
+        # AllowsTearing -> G-Sync aktiv?
+        $tearingActive = $false
+        if ($data[0].PSObject.Properties.Name -contains 'AllowsTearing') {
+            $tearingActive = (($data | Where-Object { $_.AllowsTearing -eq '1' }).Count -gt ($n * 0.5))
+        }
+
+        return @{
+            CsvPath = $CsvPath
+            FileName = [System.IO.Path]::GetFileName($CsvPath)
+            CaptureTime = (Get-Item $CsvPath).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+            Frames = $n
+            DurationSec = [math]::Round($n / $avgFps, 1)
+            AvgFps = $avgFps
+            OnePctLow = $onePct
+            ZeroOnePctLow = $zeroOnePct
+            AvgMs = [math]::Round($avgMs, 2)
+            StdDevMs = $stddev
+            StutterPct = $stutterPct
+            PresentMode = $pmTopName
+            PresentModeLabel = $modeLabel
+            PresentModeQuality = $modeQuality
+            GSyncActive = $tearingActive
+        }
+    } catch {
+        return @{ Error = $_.Exception.Message }
+    }
+}
+
 # ==================== TWEAK APPLY/REVERT WRAPPERS ====================
 function Invoke-TweakApply {
     param($Tweak)
@@ -2038,6 +2334,291 @@ $ctrls.btnApplyAll.Add_Click({
     [System.Windows.MessageBox]::Show($msg, 'Apply All', 'OK', 'Information') | Out-Null
     Update-TweaksTab; Update-StatusGrid
 })
+
+# ==================== CAPTURE TAB ====================
+$Global:CaptureState = @{
+    IsRunning = $false
+    Timer = $null
+    Process = $null
+    OutputCsv = ''
+    SecondsRemaining = 0
+    Phase = 'idle'    # idle / countdown / capturing / analyzing
+    LastResult = $null
+}
+
+function Update-CapToolStatus {
+    $pm = Get-PresentMonPath
+    if ($pm) {
+        $ctrls.lblCapToolStatus.Text = "installiert ($([System.IO.Path]::GetFileName($pm)))"
+        $ctrls.lblCapToolStatus.Foreground = '#4ade80'
+    } else {
+        $ctrls.lblCapToolStatus.Text = 'NICHT installiert - wird beim Start automatisch geladen'
+        $ctrls.lblCapToolStatus.Foreground = '#fbbf24'
+    }
+}
+
+function Show-CapResult {
+    param($Result)
+    if (-not $Result -or $Result.Error) {
+        $ctrls.lblCapLastInfo.Text = "Fehler: $($Result.Error)"
+        $ctrls.lblCapLastInfo.Foreground = '#f87171'
+        $ctrls.capResultGrid.Visibility = 'Collapsed'
+        return
+    }
+    $ctrls.lblCapLastInfo.Text = "$($Result.CaptureTime)  -  $($Result.Frames) Frames in $($Result.DurationSec)s  -  $($Result.FileName)"
+    $ctrls.lblCapLastInfo.Foreground = '#9ca3af'
+    $ctrls.capResultGrid.Visibility = 'Visible'
+
+    $ctrls.lblCapAvg.Text = $Result.AvgFps
+    $ctrls.lblCap1Low.Text = $Result.OnePctLow
+    $ctrls.lblCap01Low.Text = $Result.ZeroOnePctLow
+    $ctrls.lblCapStdDev.Text = "$($Result.StdDevMs) ms"
+
+    $ctrls.lblCapPresentMode.Text = $Result.PresentModeLabel
+    $modeColor = switch ($Result.PresentModeQuality) {
+        'OK'   { '#4ade80' }
+        'WARN' { '#fbbf24' }
+        'BAD'  { '#f87171' }
+        default{ '#e5e7eb' }
+    }
+    $ctrls.lblCapPresentMode.Foreground = $modeColor
+
+    if ($Result.GSyncActive) {
+        $ctrls.lblCapGSync.Text = 'AKTIV'
+        $ctrls.lblCapGSync.Foreground = '#4ade80'
+    } else {
+        $ctrls.lblCapGSync.Text = 'inaktiv'
+        $ctrls.lblCapGSync.Foreground = '#9ca3af'
+    }
+
+    $ctrls.lblCapStutter.Text = "$($Result.StutterPct)%"
+    $ctrls.lblCapStutter.Foreground = if ($Result.StutterPct -lt 0.2) { '#4ade80' } elseif ($Result.StutterPct -lt 0.5) { '#fbbf24' } else { '#f87171' }
+}
+
+function Update-CapHistory {
+    $ctrls.capHistoryList.Children.Clear()
+    $hist = @(Get-CaptureHistory)
+    if ($hist.Count -eq 0) {
+        $ctrls.lblCapHistInfo.Text = 'Keine Trend-Daten - mache mind. 2 Messungen zum Vergleich.'
+        return
+    }
+    $ctrls.lblCapHistInfo.Text = "$($hist.Count) Messung(en) gespeichert - Top 8 angezeigt"
+
+    # Header-Row
+    $hdr = New-Object System.Windows.Controls.Border
+    $hdr.Background = '#0f1115'; $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+    $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
+    $hdrGrid = New-Object System.Windows.Controls.Grid
+    $hdr.Child = $hdrGrid
+    foreach ($w in 130,60,60,60,55,90) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = $w; $hdrGrid.ColumnDefinitions.Add($cd) | Out-Null
+    }
+    $hdrTexts = @('DATE/TIME','AVG','1%','0.1%','STDEV','MODE')
+    for ($i = 0; $i -lt $hdrTexts.Count; $i++) {
+        $tb = New-Object System.Windows.Controls.TextBlock
+        $tb.Text = $hdrTexts[$i]; $tb.Foreground = '#9ca3af'; $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
+        [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+        $hdrGrid.Children.Add($tb) | Out-Null
+    }
+    $ctrls.capHistoryList.Children.Add($hdr) | Out-Null
+
+    # Bis zu 8 letzte Einträge, neueste zuerst
+    $recent = @($hist | Select-Object -Last 8) | Sort-Object -Property CaptureTime -Descending
+    foreach ($e in $recent) {
+        $row = New-Object System.Windows.Controls.Border
+        $row.Background = '#1a1d23'; $row.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+        $row.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
+        $row.CornerRadius = (New-Object System.Windows.CornerRadius 2)
+        $grid = New-Object System.Windows.Controls.Grid
+        $row.Child = $grid
+        foreach ($w in 130,60,60,60,55,90) {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = $w; $grid.ColumnDefinitions.Add($cd) | Out-Null
+        }
+        $vals = @(
+            $e.CaptureTime.Substring(5,11),
+            "$($e.AvgFps)",
+            "$($e.OnePctLow)",
+            "$($e.ZeroOnePctLow)",
+            "$($e.StdDevMs)",
+            $(if ($e.PresentMode) { "Mode $($e.PresentMode)" } else { '?' })
+        )
+        $cols = @('#d1d5db','#4ade80','#fbbf24','#f87171','#60a5fa','#e5e7eb')
+        for ($i = 0; $i -lt 6; $i++) {
+            $tb = New-Object System.Windows.Controls.TextBlock
+            $tb.Text = "$($vals[$i])"; $tb.Foreground = $cols[$i]; $tb.FontSize = 11
+            $tb.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
+            [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+            $grid.Children.Add($tb) | Out-Null
+        }
+        $ctrls.capHistoryList.Children.Add($row) | Out-Null
+    }
+}
+
+function Stop-CaptureTimer {
+    if ($Global:CaptureState.Timer) {
+        try { $Global:CaptureState.Timer.Stop() } catch {}
+        $Global:CaptureState.Timer = $null
+    }
+}
+
+function Cleanup-CapState {
+    Stop-CaptureTimer
+    if ($Global:CaptureState.Process -and -not $Global:CaptureState.Process.HasExited) {
+        try { $Global:CaptureState.Process.Kill() } catch {}
+    }
+    $Global:CaptureState.IsRunning = $false
+    $Global:CaptureState.Phase = 'idle'
+    $ctrls.btnCapStart.IsEnabled = $true
+    $ctrls.btnCapStop.IsEnabled = $false
+}
+
+function Start-PUBGCapture {
+    if ($Global:CaptureState.IsRunning) { return }
+
+    # PresentMon vorhanden?
+    $pm = Get-PresentMonPath
+    if (-not $pm) {
+        $ctrls.lblCapPhase.Text = 'PresentMon nicht installiert - lade von GitHub...'
+        $ctrls.lblCapPhase.Foreground = '#fbbf24'
+        Write-SuiteLog "PresentMon nicht gefunden - starte Auto-Install" 'INFO'
+        $pm = Install-PresentMonFromGitHub
+        Update-CapToolStatus
+        if (-not $pm) {
+            $ctrls.lblCapPhase.Text = 'PresentMon-Install fehlgeschlagen - Logs pruefen'
+            $ctrls.lblCapPhase.Foreground = '#f87171'
+            return
+        }
+    }
+
+    # PUBG laeuft?
+    $pubg = @(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue)
+    if ($pubg.Count -eq 0) {
+        $ctrls.lblCapPhase.Text = 'PUBG (TslGame.exe) laeuft nicht - erst Spiel starten + ins Match'
+        $ctrls.lblCapPhase.Foreground = '#f87171'
+        return
+    }
+
+    Initialize-SuiteStorage
+    $ts = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+    $outCsv = Join-Path $Global:Suite.CaptureDir "capture_$ts.csv"
+    $Global:CaptureState.OutputCsv = $outCsv
+    $Global:CaptureState.IsRunning = $true
+    $Global:CaptureState.SecondsRemaining = 10
+    $Global:CaptureState.Phase = 'countdown'
+
+    $ctrls.btnCapStart.IsEnabled = $false
+    $ctrls.btnCapStop.IsEnabled = $true
+
+    Write-SuiteLog "Capture-Start: PresentMon=$pm, Output=$outCsv" 'INFO'
+
+    # DispatcherTimer (Tick alle 1s) - laeuft im UI-Thread, blockt nichts
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromSeconds(1)
+    $script:capPm = $pm
+    $script:capOutCsv = $outCsv
+
+    $timer.Add_Tick({
+        try {
+            $state = $Global:CaptureState
+            if ($state.Phase -eq 'countdown') {
+                if ($state.SecondsRemaining -gt 0) {
+                    $ctrls.lblCapPhase.Text = "Capture startet in $($state.SecondsRemaining)s - jetzt Alt+Tab zu PUBG!"
+                    $ctrls.lblCapPhase.Foreground = '#fbbf24'
+                    $state.SecondsRemaining--
+                } else {
+                    # Switch zu capturing
+                    $state.Phase = 'capturing'
+                    $state.SecondsRemaining = 60
+                    $args = @('-process_name','TslGame.exe','-timed','60','-terminate_after_timed','-output_file',$script:capOutCsv)
+                    try {
+                        $state.Process = Start-Process -FilePath $script:capPm -ArgumentList $args -WindowStyle Hidden -PassThru -ErrorAction Stop
+                        $ctrls.lblCapPhase.Text = "Capturing 60s - in PUBG normal spielen"
+                        $ctrls.lblCapPhase.Foreground = '#4ade80'
+                        Write-SuiteLog "PresentMon gestartet PID $($state.Process.Id)"
+                    } catch {
+                        $ctrls.lblCapPhase.Text = "Fehler beim PresentMon-Start: $($_.Exception.Message)"
+                        $ctrls.lblCapPhase.Foreground = '#f87171'
+                        Write-SuiteLog "PresentMon-Start Fehler: $($_.Exception.Message)" 'ERROR'
+                        Cleanup-CapState
+                        return
+                    }
+                }
+            } elseif ($state.Phase -eq 'capturing') {
+                if ($state.SecondsRemaining -gt 0) {
+                    $ctrls.lblCapPhase.Text = "Capturing... verbleibend $($state.SecondsRemaining)s"
+                    $state.SecondsRemaining--
+                }
+                # Pruefen ob Prozess fertig
+                if ($state.Process -and $state.Process.HasExited) {
+                    $state.Phase = 'analyzing'
+                    $ctrls.lblCapPhase.Text = 'Analyse...'
+                    $ctrls.lblCapPhase.Foreground = '#60a5fa'
+                }
+            } elseif ($state.Phase -eq 'analyzing') {
+                Stop-CaptureTimer
+                # CSV analysieren
+                $result = Analyze-CaptureCSV -CsvPath $state.OutputCsv
+                if ($result.Error) {
+                    $ctrls.lblCapPhase.Text = "Analyse-Fehler: $($result.Error)"
+                    $ctrls.lblCapPhase.Foreground = '#f87171'
+                    Write-SuiteLog "Capture Analyse Fehler: $($result.Error)" 'ERROR'
+                } else {
+                    Show-CapResult $result
+                    Add-CaptureEntry $result
+                    Update-CapHistory
+                    $ctrls.lblCapPhase.Text = "Fertig - $($result.Frames) Frames erfasst, AvgFps $($result.AvgFps)"
+                    $ctrls.lblCapPhase.Foreground = '#4ade80'
+                    Write-SuiteLog "Capture fertig: AvgFps=$($result.AvgFps) 1%=$($result.OnePctLow) Mode=$($result.PresentMode)"
+                    $Global:CaptureState.LastResult = $result
+                }
+                Cleanup-CapState
+            }
+        } catch {
+            Write-SuiteLog "Capture-Timer Fehler: $($_.Exception.Message)" 'ERROR'
+            $ctrls.lblCapPhase.Text = "Timer-Fehler: $($_.Exception.Message)"
+            $ctrls.lblCapPhase.Foreground = '#f87171'
+            Cleanup-CapState
+        }
+    })
+    $Global:CaptureState.Timer = $timer
+    $timer.Start()
+}
+
+$ctrls.btnCapStart.Add_Click({ Start-PUBGCapture })
+$ctrls.btnCapStop.Add_Click({
+    Write-SuiteLog "Capture manuell abgebrochen" 'WARN'
+    $ctrls.lblCapPhase.Text = 'Abgebrochen.'
+    $ctrls.lblCapPhase.Foreground = '#fbbf24'
+    Cleanup-CapState
+})
+$ctrls.btnCapOpenCsv.Add_Click({
+    if ($Global:CaptureState.LastResult -and (Test-Path $Global:CaptureState.LastResult.CsvPath)) {
+        Start-Process notepad.exe -ArgumentList $Global:CaptureState.LastResult.CsvPath
+    } else {
+        # Letzte CSV aus History
+        $hist = @(Get-CaptureHistory)
+        if ($hist.Count -gt 0 -and (Test-Path $hist[-1].CsvPath)) {
+            Start-Process notepad.exe -ArgumentList $hist[-1].CsvPath
+        } else {
+            [System.Windows.MessageBox]::Show('Noch keine Capture-Datei vorhanden.','Info','OK','Information') | Out-Null
+        }
+    }
+})
+$ctrls.btnCapOpenFolder.Add_Click({
+    Initialize-SuiteStorage
+    Start-Process explorer.exe -ArgumentList $Global:Suite.CaptureDir
+})
+
+Update-CapToolStatus
+Update-CapHistory
+# Beim Start: letztes Ergebnis aus History laden falls vorhanden
+$hist = @(Get-CaptureHistory)
+if ($hist.Count -gt 0) {
+    $Global:CaptureState.LastResult = $hist[-1]
+    Show-CapResult $hist[-1]
+}
 
 # Admin-Badge initial setzen
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auto-update check at startup
 - English UI localization
 - GitHub Actions release pipeline
+- Capture: comparison view (delta vs previous)
+
+## [0.9.1-beta] - 2026-05-12
+### Added — Performance Capture Tab
+- New "Capture" tab between Diagnose and Game Mode
+- Intel PresentMon auto-install from GitHub Releases (passive ETW, no DLL hook)
+- One-click 60-second capture with 10-second pre-countdown for Alt-Tab
+- Live phase indicator: countdown -> capturing -> analyzing
+- Big KPI cards: Avg FPS / 1% Low / 0.1% Low / StdDev / PresentMode / G-Sync / Stutter
+- Color-coded PresentMode quality (Mode 1/3/4 = OK, Mode 5/6 = BAD)
+- Captures saved to `%LOCALAPPDATA%\PUBGSuite\captures\capture_<timestamp>.csv`
+- Persistent history in `captures.json` (last 50)
+- Trend table: last 8 captures with Date/Avg/1%/0.1%/StdDev/Mode side-by-side
+- "Open last CSV" / "Open Captures Folder" actions
 
 ## [0.9.0-beta] - 2026-05-12
 ### Added — Trust Foundation
