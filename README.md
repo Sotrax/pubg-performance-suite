@@ -31,19 +31,22 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 ## Screenshots
 
 ### Dashboard - Live Status + Quick Actions + Empfehlungen
-![Dashboard](docs/screenshots/dashboard.png)
+![Dashboard](docs/screenshots/Dashboard.png)
 
 ### Tweaks Tab - 15 Tweaks mit Apply/Revert, Filter, Per-Tweak Details
-![Tweaks](docs/screenshots/tweaks.png)
+![Tweaks](docs/screenshots/Tweaks.png)
 
 ### Game Mode - Pre-Game Prep (Monitore, RTSS, Background-Apps)
-![Game Mode](docs/screenshots/game-mode.png)
+![Game Mode](docs/screenshots/Game_Mode.png)
 
 ### Capture Tab - 60s PresentMon-Capture mit 14 KPIs + Trend-Tabelle
-![Capture](docs/screenshots/capture.png)
+![Capture](docs/screenshots/Capture.png)
+
+### Diagnose - Full System Diagnose (v6) mit HTML-Report
+![Diagnose](docs/screenshots/Diagnose.png)
 
 ### Settings - Auto-Detected Hardware + Pfade + Logs/Backups
-![Settings](docs/screenshots/settings.png)
+![Settings](docs/screenshots/Settings.png)
 
 ## Features
 
