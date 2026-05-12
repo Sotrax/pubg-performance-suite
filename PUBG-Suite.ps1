@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.10.1-beta'
+    Version    = '0.11.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -229,11 +229,18 @@ function Restore-FileFromBackup {
 function Get-LiveStatus {
     $s = [ordered]@{}
 
-    # HVCI
+    # VBS + HVCI (zusammen)
     try {
         $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction Stop
-        $hvci = ($dg.SecurityServicesRunning -contains 2)
-        $s['HVCI'] = if ($hvci) { @{ Value='AN'; Status='BAD' } } else { @{ Value='AUS'; Status='OK' } }
+        $vbsRunning = ($dg.VirtualizationBasedSecurityStatus -eq 2)
+        $hvciRunning = ($dg.SecurityServicesRunning -contains 2)
+        if ($hvciRunning) {
+            $s['HVCI'] = @{ Value='HVCI + VBS aktiv'; Status='BAD' }
+        } elseif ($vbsRunning) {
+            $s['HVCI'] = @{ Value='VBS aktiv (HVCI aus)'; Status='WARN' }
+        } else {
+            $s['HVCI'] = @{ Value='AUS'; Status='OK' }
+        }
     } catch { $s['HVCI'] = @{ Value='?'; Status='SKIP' } }
 
     # Energieplan
@@ -631,8 +638,8 @@ $Global:Tweaks = @(
         }
     },
     [PSCustomObject]@{
-        Id='engineini'; Cat='PUBG'; Name='Engine.ini Tweaks (Sharpen + Streaming + Pacing)'; Admin=$false
-        Desc='Spotting-Buff + bessere 1%-Lows. BattlEye-safe. Datei wird Read-Only damit PUBG sie beim naechsten Start nicht ueberschreibt.'; Impact='GERING'; ImpactDetail='Engine.ini ist nach Apply read-only - PUBG-interne r.setres-Aenderungen werden geblockt (kein Game-Crash, nur Reset-via-PUBG-Menue funktioniert nicht mehr bis Revert).'
+        Id='engineini'; Cat='PUBG'; Name='Engine.ini Tweaks (Sharpen + Streaming + Pacing + AllowTearing)'; Admin=$false
+        Desc='Spotting-Buff + bessere 1%-Lows + Hardware Independent Flip. BattlEye-safe. Datei wird Read-Only damit PUBG sie beim naechsten Start nicht ueberschreibt.'; Impact='GERING'; ImpactDetail='Engine.ini ist nach Apply read-only - PUBG-interne r.setres-Aenderungen werden geblockt (kein Game-Crash, nur Reset-via-PUBG-Menue funktioniert nicht mehr bis Revert).'
         Changes = @(
             'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\Engine.ini',
             'Backup vor Aenderung als .bak_<timestamp>',
@@ -640,6 +647,7 @@ $Global:Tweaks = @(
             '[SystemSettings] r.GTSyncType=1            (glattere Frametimes)',
             '[SystemSettings] r.OneFrameThreadLag=0     (Frame-Pacing)',
             '[SystemSettings] r.FinishCurrentFrame=0    (Frame-Pacing)',
+            '[SystemSettings] r.D3D11.UseAllowTearing=1 (DXGI Flip-Model: Hardware Independent Flip)',
             '[/Script/Engine.RendererSettings] r.Streaming.PoolSize=4096',
             '[/Script/Engine.RendererSettings] r.Streaming.HLODStrategy=2',
             '[/Script/Engine.RendererSettings] r.Streaming.FramesForFullUpdate=1',
@@ -652,7 +660,8 @@ $Global:Tweaks = @(
             $hasSharpen = $c -match 'r\.Tonemapper\.Sharpen\s*=\s*0\.7'
             $hasStreaming = $c -match 'r\.Streaming\.PoolSize\s*=\s*4096'
             $hasGTSync = $c -match 'r\.GTSyncType\s*=\s*1'
-            if ($hasSharpen -and $hasStreaming -and $hasGTSync) { 'OK' } else { 'WARN' }
+            $hasTearing = $c -match 'r\.D3D11\.UseAllowTearing\s*=\s*1'
+            if ($hasSharpen -and $hasStreaming -and $hasGTSync -and $hasTearing) { 'OK' } else { 'WARN' }
         }
         SnapshotFn = {
             $eng = Get-PUBGEnginePath
@@ -684,6 +693,7 @@ $Global:Tweaks = @(
                         'r.OneFrameThreadLag' = '0'
                         'r.FinishCurrentFrame' = '0'
                         'r.GTSyncType' = '1'
+                        'r.D3D11.UseAllowTearing' = '1'
                     }
                     '/Script/Engine.RendererSettings' = @{
                         'r.Streaming.PoolSize' = '4096'
@@ -830,26 +840,100 @@ $Global:Tweaks = @(
         }
     },
     [PSCustomObject]@{
-        Id='hvci'; Cat='System'; Name='Memory Integrity (HVCI): AUS'; Admin=$true
-        Desc='5-8% FPS in CPU-bound Games. Erfordert Reboot'; Impact='MITTEL'
-        ImpactDetail='Kernel-Schutz gegen unsignierte Treiber faellt weg - bei Solo-Gaming akzeptabel'
+        Id='hvci'; Cat='System'; Name='Virtualization Security (VBS + HVCI): AUS'; Admin=$true
+        Desc='5-10% FPS in CPU-bound Games (Toms Hardware Benchmark). Erfordert Reboot. Win11 24H2 reaktiviert VBS sonst bei Feature-Updates.'; Impact='MITTEL'
+        ImpactDetail='Senkt OS-Security: kein Memory Integrity (HVCI), kein Credential Guard, kein Hyper-V-Hypervisor. Bei Solo-Gaming + bewusster Auswahl ok - bei Multi-User-PC ueberlegen.'
         Changes = @(
-            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity',
-            'Enabled = 0 (DWord)',
+            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\EnableVirtualizationBasedSecurity = 0',
+            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity\Enabled = 0',
+            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard\Enabled = 0',
+            'bcdedit /set hypervisorlaunchtype off  (kritisch fuer 24H2 - sonst reaktiviert Windows VBS)',
             'WICHTIG: greift erst nach REBOOT'
         )
         StatusFn = {
             try {
                 $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction Stop
-                if ($dg.SecurityServicesRunning -contains 2) { 'BAD' } else { 'OK' }
+                # VirtualizationBasedSecurityStatus: 0=Off, 1=Configured/NotRunning, 2=Running
+                $vbsRunning = ($dg.VirtualizationBasedSecurityStatus -eq 2)
+                $hvciRunning = ($dg.SecurityServicesRunning -contains 2)
+                if ($vbsRunning -or $hvciRunning) { 'BAD' } else { 'OK' }
             } catch { 'SKIP' }
         }
-        SnapshotFn = { Get-RegistrySnapshot -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' }
+        SnapshotFn = {
+            $rootDG = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
+            $hvciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+            $credGuardKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard'
+            # bcdedit-State auslesen
+            $hvLaunchType = 'auto'
+            try {
+                $bcdOut = & bcdedit /enum '{current}' 2>$null | Out-String
+                if ($bcdOut -match '(?im)^\s*hypervisorlaunchtype\s+(\w+)') { $hvLaunchType = $matches[1] }
+            } catch {}
+            return @{
+                Vbs = (Get-RegistrySnapshot -Path $rootDG -Name 'EnableVirtualizationBasedSecurity')
+                Hvci = (Get-RegistrySnapshot -Path $hvciKey -Name 'Enabled')
+                CredGuard = (Get-RegistrySnapshot -Path $credGuardKey -Name 'Enabled')
+                HvLaunchType = $hvLaunchType
+            }
+        }
         ApplyFn = {
             try {
-                $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+                $rootDG = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
+                $hvciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+                $credGuardKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard'
+                foreach ($p in @($rootDG,$hvciKey,$credGuardKey)) {
+                    if (-not (Test-Path $p)) { New-Item $p -Force -ErrorAction Stop | Out-Null }
+                }
+                Set-ItemProperty $rootDG -Name 'EnableVirtualizationBasedSecurity' -Value 0 -Type DWord -ErrorAction Stop
+                Set-ItemProperty $hvciKey -Name 'Enabled' -Value 0 -Type DWord -ErrorAction Stop
+                Set-ItemProperty $credGuardKey -Name 'Enabled' -Value 0 -Type DWord -ErrorAction Stop
+                # Hypervisor-Launch-Type aus - kritisch fuer 24H2, sonst reaktiviert Windows VBS automatisch
+                $bcdOut = & bcdedit /set hypervisorlaunchtype off 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-SuiteLog "bcdedit failed: $bcdOut" 'WARN'
+                    # nicht hart abbrechen - die Registry-Aenderungen helfen schon
+                }
+                return $true
+            } catch { return $false }
+        }
+        RevertFn = {
+            param($snap)
+            $ok = $true
+            if ($snap.Vbs)        { $ok = (Restore-RegistrySnapshot $snap.Vbs)        -and $ok }
+            if ($snap.Hvci)       { $ok = (Restore-RegistrySnapshot $snap.Hvci)       -and $ok }
+            if ($snap.CredGuard)  { $ok = (Restore-RegistrySnapshot $snap.CredGuard)  -and $ok }
+            # bcdedit zurueck auf vorherigen Wert (default = auto)
+            if ($snap.HvLaunchType) {
+                try {
+                    & bcdedit /set hypervisorlaunchtype $snap.HvLaunchType 2>&1 | Out-Null
+                } catch { $ok = $false }
+            }
+            return $ok
+        }
+    },
+    [PSCustomObject]@{
+        Id='hags'; Cat='System'; Name='Hardware-accelerated GPU Scheduling (HAGS): AN'; Admin=$true
+        Desc='Verschiebt GPU-Queue-Submit + VRAM-Management auf dedizierten GPU-MCU. Voraussetzung fuer DLSS-Frame-Generation und voll funktionsfaehigen NVIDIA Reflex.'; Impact='GERING'
+        ImpactDetail='PUBG-spezifisch unklar - kein publizierter A/B-Test. UE4 hatte in einigen Titeln Shader-Compile-Stutter mit HAGS=ON. PUBG hat keine DLSS-FG, der Hauptvorteil entfaellt also. Aber: schadet meist auch nicht. Default: nicht in Apply-All - manuell testen.'
+        Changes = @(
+            'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode',
+            'HwSchMode = 2 (0=disabled, 2=enabled, REG_DWORD)',
+            'WICHTIG: greift erst nach REBOOT'
+        )
+        StatusFn = {
+            try {
+                $v = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -ErrorAction SilentlyContinue).HwSchMode
+                if ($null -eq $v) { 'SKIP' }
+                elseif ($v -eq 2) { 'OK' }
+                else { 'WARN' }
+            } catch { 'SKIP' }
+        }
+        SnapshotFn = { Get-RegistrySnapshot -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' }
+        ApplyFn = {
+            try {
+                $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
                 if (-not (Test-Path $key)) { New-Item $key -Force -ErrorAction Stop | Out-Null }
-                Set-ItemProperty $key -Name 'Enabled' -Value 0 -Type DWord -ErrorAction Stop
+                Set-ItemProperty $key -Name 'HwSchMode' -Value 2 -Type DWord -ErrorAction Stop
                 return $true
             } catch { return $false }
         }
@@ -1859,7 +1943,7 @@ function Update-StatusGrid {
     # Recommendation-Engine: pro Befund eine visuelle Card mit Severity + Tab-Sprung
     # Tab-Index: 0=Dashboard, 1=Tweaks, 2=Game Mode, 3=Capture, 4=Diagnose, 5=Settings (nach Reorder)
     $recos = @()
-    if ($live['HVCI'].Status -ne 'OK')         { $recos += @{ Sev='BAD';  Title='HVCI ist AN'; Detail='Memory Integrity deaktivieren - groesster FPS-Hebel (~5-15 FPS). Tweak: "HVCI Disable"'; TabIdx=1 } }
+    if ($live['HVCI'].Status -ne 'OK')         { $recos += @{ Sev='BAD';  Title='VBS / HVCI ist AN'; Detail='Virtualization-Based Security deaktivieren - groesster FPS-Hebel (5-10% laut Toms Hardware). Tweak: "Virtualization Security (VBS + HVCI): AUS"'; TabIdx=1 } }
     if ($live['Energieplan'].Status -ne 'OK')  { $recos += @{ Sev='WARN'; Title='Energieplan nicht Maximum'; Detail='Auf Hoechstleistung wechseln - haelt CPU-Frequenz auf Vollgas'; TabIdx=1 } }
     if ($live['GameDVR'].Status -ne 'OK')      { $recos += @{ Sev='BAD';  Title='Xbox Game DVR ist AN'; Detail='Game Bar Recording laeuft im Hintergrund mit. Tweak: "Game DVR AUS"'; TabIdx=1 } }
     if ($live['RTSS'].Status -ne 'OK')         { $recos += @{ Sev='WARN'; Title='RTSS laeuft'; Detail='Erzwingt Present-Mode 5 (Composed Copy, ~3-5ms Overhead). Game-Mode-Start killt es automatisch'; TabIdx=2 } }

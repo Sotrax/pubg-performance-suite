@@ -14,6 +14,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.11.0-beta] - 2026-05-12
+### Added — 2025/2026-Research Sprint 1 (3 evidenz-basierte Tweaks)
+
+Nach systematischem Skeptiker-Check der Recherche-Findings ("verify before
+ship") sind 2 von 5 Kandidaten als Placebo rausgeflogen (Segment Heap IFEO,
+MMCSS Per-Task) - die anderen 3 sind hier mit ihren Quellen:
+
+**Upgrade: bestehender HVCI-Tweak -> "Virtualization Security (VBS + HVCI): AUS"**
+- Bisher: nur `Scenarios\HypervisorEnforcedCodeIntegrity\Enabled=0` - das deckte
+  nur Memory Integrity ab. Win11 24H2 reaktiviert VBS bei Feature-Updates,
+  weil der Master-Toggle weiter on stand und der Hypervisor lief
+- Jetzt: ALLE 3 VBS-Komponenten + bcdedit:
+  - `DeviceGuard\EnableVirtualizationBasedSecurity = 0`
+  - `DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity\Enabled = 0`
+  - `DeviceGuard\Scenarios\CredentialGuard\Enabled = 0`
+  - `bcdedit /set hypervisorlaunchtype off` (kritisch fuer 24H2)
+- StatusFn nutzt jetzt `Win32_DeviceGuard.VirtualizationBasedSecurityStatus`
+  zusaetzlich zu `SecurityServicesRunning`
+- Dashboard-Card differenziert: "HVCI + VBS aktiv" (BAD) / "VBS aktiv (HVCI aus)"
+  (WARN) / "AUS" (OK)
+- Evidenz: Toms Hardware 5-10% Gaming-Verlust mit VBS on, Neowin 2024-Retest
+  bestaetigt Penalty auf aktuellen Win11-Builds, Microsoft-eigene Zahlen
+  raeumen ~5% in CPU-bound Workloads ein. PUBG (240Hz CPU-bound DX11 UE4)
+  ist genau das Profil mit hoechstem Gewinn.
+
+**Neuer Tweak: Hardware-accelerated GPU Scheduling (HAGS) AN (Optional)**
+- `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode = 2`
+- Reboot erforderlich
+- Default: NICHT in "Apply All" - manuell zu aktivieren
+- ImpactDetail klar: "PUBG-spezifisch unklar - kein publizierter A/B-Test.
+  Hauptvorteil ist DLSS-Frame-Generation, die PUBG nicht hat. UE4 hatte in
+  manchen Titeln Shader-Compile-Stutter mit HAGS=ON. Aber: schadet meist
+  nicht."
+- Evidenz: Blur Busters Latency-Tests, NVIDIA Reflex/FG Voraussetzung -
+  aber keine publizierten PUBG-spezifischen Zahlen, daher als Optional
+  markiert
+
+**Erweiterung bestehender Engine.ini-Tweak: + `r.D3D11.UseAllowTearing=1`**
+- Setzt `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` auf Swap-Chain + `DXGI_PRESENT_ALLOW_TEARING`
+  beim Present-Call - erlaubt Hardware Independent Flip auf DX11 Borderless
+  wenn VSync aus
+- Mechanismus offiziell von Microsoft empfohlen ("DXGI Flip Model" Dev-Blog)
+  fuer niedrigste DX11-Latency
+- Caveat (im Tweak dokumentiert): wirkt nur wenn VSync = OFF + Borderless
+  oder Fullscreen. Bei FSE ist Tearing eh erlaubt, dann no-op. Auf
+  Win11 24H2 macht DWM Independent Flip ohnehin aggressiver - auch da
+  evtl. redundant. Bestcase: ein Frame DWM-Compose weniger.
+- BattlEye-safe: Engine.ini ist user-writable + PUBG schreibt selbst rein,
+  kein Banwave-Thread zu CVar-Edits gefunden
+
+### Bewusst NICHT aufgenommen (nach Skeptiker-Check)
+- **Segment Heap fuer TslGame.exe** (IFEO `FrontEndHeapDebugOptions=0x08`):
+  Mechanismus existiert (Sebastian Schoener 2024), aber UE4 nutzt eigenen
+  `FMalloc`-Allocator (TBB/Mimalloc/Binned2) und umgeht den NT-Heap im
+  Hot-Path. Null Benchmark zeigt FPS-Gain bei Spielen. Placebo.
+- **MMCSS `\Tasks\Games` Per-Task Subkey**: Microsoft Learn explizit:
+  `GPU Priority` = "is not yet used", `SFIO Priority` = "is not used".
+  Plus: Registry-Werte greifen nur wenn der Prozess
+  `AvSetMmThreadCharacteristics("Games", ...)` aufruft - UE4/PUBG macht
+  das nicht. Pure Placebo, denis-g klassifiziert exakt diese Tweaks als
+  Snake-Oil.
+
 ## [0.10.1-beta] - 2026-05-12
 ### Fixed — Capture Tab Display-Bugs nach 0.9.7-Erweiterung
 - Neue Metriken (Bottleneck, CPU Busy, GPU Busy, Render Latency, Until Displayed, Click-to-Photon) zeigten beim Suite-Start "NA" obwohl die CSV-Daten existierten - Ursache: beim Start wurde der letzte History-Eintrag direkt gerendert, alte Eintraege (aus 0.9.6 und davor) hatten diese Felder schlicht nicht im JSON. Fix: wenn die CSV noch existiert wird sie beim Suite-Start neu mit `Analyze-CaptureCSV` analysiert und das frische Ergebnis angezeigt (statt der gespeicherten History-Zeile)
