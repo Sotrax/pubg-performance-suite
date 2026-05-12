@@ -5,7 +5,7 @@
 Open an **Administrator PowerShell** and run:
 
 ```powershell
-irm "https://raw.githubusercontent.com/<YOUR-USERNAME>/pubg-performance-suite/main/launch.ps1" | iex
+irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex
 ```
 
 This will:
@@ -27,9 +27,9 @@ irm "https://raw.githubusercontent.com/$env:PUBGSUITE_REPO/main/launch.ps1" | ie
 
 ## Method 2: Manual Install
 
-1. Download the [latest release ZIP](https://github.com/<YOUR-USERNAME>/pubg-performance-suite/releases) or clone the repo:
+1. Download the [latest release ZIP](https://github.com/Sotrax/pubg-performance-suite/releases) or clone the repo:
    ```bash
-   git clone https://github.com/<YOUR-USERNAME>/pubg-performance-suite.git
+   git clone https://github.com/Sotrax/pubg-performance-suite.git
    ```
 2. Move the folder somewhere stable (e.g. `C:\Tools\pubg-performance-suite\`)
 3. Right-click `PUBG-Suite.bat` → **Run as administrator**
@@ -40,7 +40,7 @@ For ongoing use, create a Desktop shortcut to `PUBG-Suite.bat`.
 ## Method 3: Develop / Customize
 
 ```bash
-git clone https://github.com/<YOUR-USERNAME>/pubg-performance-suite.git
+git clone https://github.com/Sotrax/pubg-performance-suite.git
 cd pubg-performance-suite
 # edit PUBG-Suite.ps1
 # run via:

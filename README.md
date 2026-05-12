@@ -74,16 +74,14 @@ Every tweak in the suite either modifies user-controllable UI settings, files in
 In an Administrator PowerShell:
 
 ```powershell
-irm "https://raw.githubusercontent.com/<YOUR-USERNAME>/pubg-performance-suite/main/launch.ps1" | iex
+irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex
 ```
 
 This downloads, installs, and launches the suite. Repeat the command anytime to update.
 
-> Replace `<YOUR-USERNAME>` with the actual GitHub username after pushing.
-
 ### Manual install
 
-1. Download the latest [release ZIP](https://github.com/<YOUR-USERNAME>/pubg-performance-suite/releases) or clone the repo
+1. Download the latest [release ZIP](https://github.com/Sotrax/pubg-performance-suite/releases) or clone the repo
 2. Extract to a folder of your choice
 3. Right-click `PUBG-Suite.bat` → **Run as administrator**
 

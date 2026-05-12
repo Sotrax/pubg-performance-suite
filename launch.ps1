@@ -13,7 +13,7 @@
 
 .NOTES
     Usage from any PowerShell session:
-        irm "https://raw.githubusercontent.com/<USER>/pubg-performance-suite/main/launch.ps1" | iex
+        irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex
 
     Re-run anytime to update to the latest release.
 
@@ -26,7 +26,7 @@
 $ErrorActionPreference = 'Stop'
 
 # ==================== CONFIG ====================
-$RepoSlug    = if ($env:PUBGSUITE_REPO) { $env:PUBGSUITE_REPO } else { '<YOUR-USERNAME>/pubg-performance-suite' }
+$RepoSlug    = if ($env:PUBGSUITE_REPO) { $env:PUBGSUITE_REPO } else { 'Sotrax/pubg-performance-suite' }
 $Branch      = 'main'
 $InstallDir  = Join-Path $env:LOCALAPPDATA 'PUBGSuite\app'
 $ShortcutPath= Join-Path ([Environment]::GetFolderPath('Desktop')) 'PUBG Performance Suite.lnk'
@@ -61,15 +61,6 @@ Write-Host ""
 Write-Host "  Repository: $RepoSlug ($Branch)" -ForegroundColor Gray
 Write-Host "  Install Pfad: $InstallDir" -ForegroundColor Gray
 Write-Host ""
-
-if ($RepoSlug -like '*<YOUR-USERNAME>*') {
-    Write-Host "  HINWEIS: Standard-Repo-Slug ist noch Platzhalter." -ForegroundColor Yellow
-    Write-Host "  Setze entweder \$env:PUBGSUITE_REPO oder pushe diesen" -ForegroundColor Yellow
-    Write-Host "  launch.ps1 mit deinem GitHub-User-Pfad als Default." -ForegroundColor Yellow
-    Write-Host ""
-    pause
-    exit 1
-}
 
 # Cleanup alte Installation (Backups/Logs in %LOCALAPPDATA%\PUBGSuite\ bleiben unangetastet)
 if (Test-Path $InstallDir) {

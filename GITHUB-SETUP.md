@@ -40,8 +40,8 @@ git add .
 # Erster Commit
 git commit -m "Initial commit - PUBG Performance Suite v0.9.0-beta"
 
-# Remote hinzufuegen (REPLACE <USER> mit deinem GitHub-Namen!)
-git remote add origin https://github.com/<USER>/pubg-performance-suite.git
+# Remote hinzufuegen (REPLACE Sotrax mit deinem GitHub-Namen!)
+git remote add origin https://github.com/<DEIN-USER>/pubg-performance-suite.git
 
 # Push
 git push -u origin main
@@ -49,27 +49,22 @@ git push -u origin main
 
 GitHub fragt nach Authentifizierung. Empfehlung: **GitHub CLI** (`gh auth login`) oder **Personal Access Token** mit `repo`-Scope.
 
-## Schritt 3: Repo-Slug überall ersetzen
+## Schritt 3: Repo-Slug anpassen (nur falls Fork)
 
-Im Code stehen Platzhalter `<YOUR-USERNAME>` und `<USER>` an mehreren Stellen.
+Wenn du das Repo forkst oder unter eigenem Namen weiterführst, ersetze alle Vorkommen von `Sotrax/pubg-performance-suite` durch deinen eigenen GitHub-Pfad:
 
 ```bash
-# Mit Git Bash / Linux-Tools:
-grep -rn '<YOUR-USERNAME>\|<USER>' . --include='*.md' --include='*.ps1'
+# Linux/Git-Bash:
+grep -rln 'Sotrax/pubg-performance-suite' . --include='*.md' --include='*.ps1' | \
+  xargs sed -i 's|Sotrax/pubg-performance-suite|DEIN-USER/dein-fork-name|g'
 ```
 
-Stellen die ersetzt werden müssen:
-- `README.md` (Install-Sektion, Acknowledgments)
-- `launch.ps1` (`$RepoSlug` Variable, Zeile ~27)
-- `docs/INSTALL.md` (Install-Beispiele)
-- `docs/TROUBLESHOOTING.md` (falls vorhanden)
+Betroffene Files: `README.md`, `launch.ps1`, `docs/INSTALL.md`.
 
-Schnellster Weg: Find & Replace im Editor (VS Code: `Ctrl+Shift+H`), suche nach `<YOUR-USERNAME>` und `<USER>`, ersetze mit deinem GitHub-Username.
-
-Dann erneut committen + pushen:
+Dann committen + pushen:
 ```bash
 git add .
-git commit -m "Replace placeholder username with <USER>"
+git commit -m "Update repo slug for fork"
 git push
 ```
 
@@ -78,7 +73,7 @@ git push
 Nach dem Push sollte folgendes funktionieren (in Admin-PowerShell auf einem anderen Rechner oder nach Suite-Deinstallation):
 
 ```powershell
-irm "https://raw.githubusercontent.com/<USER>/pubg-performance-suite/main/launch.ps1" | iex
+irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex
 ```
 
 Erwartung:
@@ -124,10 +119,10 @@ $zipUrl = $release.zipball_url
 Die Badges im README sind aktuell statisch. Optional kannst du dynamische Badges einbauen:
 
 ```markdown
-![GitHub release](https://img.shields.io/github/v/release/<USER>/pubg-performance-suite?include_prereleases)
-![GitHub last commit](https://img.shields.io/github/last-commit/<USER>/pubg-performance-suite)
-![GitHub issues](https://img.shields.io/github/issues/<USER>/pubg-performance-suite)
-![GitHub stars](https://img.shields.io/github/stars/<USER>/pubg-performance-suite?style=social)
+![GitHub release](https://img.shields.io/github/v/release/Sotrax/pubg-performance-suite?include_prereleases)
+![GitHub last commit](https://img.shields.io/github/last-commit/Sotrax/pubg-performance-suite)
+![GitHub issues](https://img.shields.io/github/issues/Sotrax/pubg-performance-suite)
+![GitHub stars](https://img.shields.io/github/stars/Sotrax/pubg-performance-suite?style=social)
 ```
 
 ## Schritt 7: Issue-Templates (optional)
@@ -169,7 +164,7 @@ Sobald das alles steht, kannst du an Freunde schicken:
 
 > Hi, hab nen PUBG-Performance-Tool gebaut. Run das in Admin-PowerShell:
 > ```powershell
-> irm "https://raw.githubusercontent.com/<USER>/pubg-performance-suite/main/launch.ps1" | iex
+> irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex
 > ```
 > Bei Bugs: Log aus `%LOCALAPPDATA%\PUBGSuite\logs\` an mich schicken.
 
