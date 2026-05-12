@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.3-beta'
+    Version    = '0.9.4-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1385,14 +1385,22 @@ Add-Type -AssemblyName System.Windows.Forms
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
-                        <Button x:Name="btnApplySelected" Content="Apply Selected" Style="{StaticResource SuccessButton}" Width="160" Height="32" Margin="0,0,8,0"/>
-                        <Button x:Name="btnApplyAll" Content="Apply All (auto-Status WARN/BAD)" Width="240" Height="32" Margin="0,0,8,0"/>
-                        <Button x:Name="btnRefreshTweaks" Content="Refresh" Width="100" Height="32" Margin="0,0,8,0"/>
-                        <Button x:Name="btnSelectAll" Content="Select All" Width="100" Height="32" Margin="0,0,8,0"/>
-                        <Button x:Name="btnSelectNone" Content="Clear" Width="80" Height="32"/>
+                    <StackPanel Grid.Row="0" Orientation="Vertical" Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="btnApplySelected" Content="Apply Selected" Style="{StaticResource SuccessButton}" Width="160" Height="32" Margin="0,0,8,0"/>
+                            <Button x:Name="btnApplyAll" Content="Apply All (auto-Status WARN/BAD)" Width="240" Height="32" Margin="0,0,8,0"/>
+                            <Button x:Name="btnRefreshTweaks" Content="Refresh" Width="100" Height="32" Margin="0,0,8,0"/>
+                            <Button x:Name="btnSelectAll" Content="Select All" Width="100" Height="32" Margin="0,0,8,0"/>
+                            <Button x:Name="btnSelectNone" Content="Clear" Width="80" Height="32"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Filter:" Foreground="#9ca3af" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <Button x:Name="btnFilterAll" Content="Alle" Width="80" Height="26" Margin="0,0,4,0"/>
+                            <Button x:Name="btnFilterOpen" Content="Offen" Width="80" Height="26" Margin="0,0,4,0"/>
+                            <Button x:Name="btnFilterDone" Content="Angewendet" Width="120" Height="26"/>
+                        </StackPanel>
                     </StackPanel>
-                    <TextBlock Grid.Row="1" x:Name="lblTweakInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,0,0,10"/>
+                    <TextBlock Grid.Row="1" x:Name="lblTweakInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                         <StackPanel x:Name="tweakContainer"/>
                     </ScrollViewer>
@@ -1505,6 +1513,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 $ctrls = @{}
 foreach ($name in @('lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblRecommendations','btnStartGameMode','btnExitGameMode',
     'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
+    'btnFilterAll','btnFilterOpen','btnFilterDone',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
@@ -2095,6 +2104,7 @@ function Test-TweakRevertable {
 
 # ==================== TWEAKS TAB UI ====================
 $Global:TweakSelection = @{}  # Id -> bool
+$Global:TweakFilter = 'open'   # 'all' / 'open' / 'done' - default: zeige nur was zu tun ist
 
 function Build-TweakRow {
     param($Tweak)
@@ -2251,43 +2261,102 @@ function Build-TweakRow {
     return $row
 }
 
+function Update-FilterButtonStyles {
+    # Markiere den aktiven Filter-Button visuell
+    $btns = @{
+        'all'  = $ctrls.btnFilterAll
+        'open' = $ctrls.btnFilterOpen
+        'done' = $ctrls.btnFilterDone
+    }
+    foreach ($key in $btns.Keys) {
+        if ($key -eq $Global:TweakFilter) {
+            $btns[$key].Background = '#2563eb'
+        } else {
+            $btns[$key].Background = '#374151'
+        }
+    }
+}
+
 function Update-TweaksTab {
     if (-not $ctrls.tweakContainer) { return }
     $ctrls.tweakContainer.Children.Clear()
 
-    # Group manuell (Group-Object auf PSCustomObject geht, aber so haben wir definierte Reihenfolge)
+    # Status pro Tweak einmalig sammeln (vermeidet n+1 Eval)
+    $tweakStatuses = @{}
+    foreach ($t in $Global:Tweaks) {
+        try { $tweakStatuses[$t.Id] = & $t.StatusFn } catch { $tweakStatuses[$t.Id] = 'SKIP' }
+    }
+
+    # Filter anwenden
+    $filteredTweaks = @($Global:Tweaks | Where-Object {
+        $st = $tweakStatuses[$_.Id]
+        switch ($Global:TweakFilter) {
+            'open' { $st -eq 'WARN' -or $st -eq 'BAD' }
+            'done' { $st -eq 'OK' }
+            default { $true }  # 'all'
+        }
+    })
+
     $catOrder = @('Windows','PUBG','System')
-    $foundCats = $Global:Tweaks | ForEach-Object { $_.Cat } | Sort-Object -Unique
+    $foundCats = $filteredTweaks | ForEach-Object { $_.Cat } | Sort-Object -Unique
     $cats = @($catOrder | Where-Object { $_ -in $foundCats }) + @($foundCats | Where-Object { $_ -notin $catOrder })
 
-    foreach ($catName in $cats) {
-        $catTweaks = @($Global:Tweaks | Where-Object { $_.Cat -eq $catName })
-        if ($catTweaks.Count -eq 0) { continue }
+    if ($filteredTweaks.Count -eq 0) {
+        $empty = New-Object System.Windows.Controls.TextBlock
+        $empty.Text = switch ($Global:TweakFilter) {
+            'open' { '+ Alle Tweaks angewendet. Nichts mehr zu tun!' }
+            'done' { 'Noch keine Tweaks angewendet.' }
+            default { 'Keine Tweaks definiert.' }
+        }
+        $empty.Foreground = if ($Global:TweakFilter -eq 'open') { '#4ade80' } else { '#9ca3af' }
+        $empty.FontSize = 14; $empty.FontWeight = 'SemiBold'
+        $empty.Margin = (New-Object System.Windows.Thickness 0,40,0,0)
+        $empty.HorizontalAlignment = 'Center'
+        $ctrls.tweakContainer.Children.Add($empty) | Out-Null
+    } else {
+        foreach ($catName in $cats) {
+            $catTweaks = @($filteredTweaks | Where-Object { $_.Cat -eq $catName })
+            if ($catTweaks.Count -eq 0) { continue }
 
-        $header = New-Object System.Windows.Controls.TextBlock
-        $header.Text = "$catName ($($catTweaks.Count))"
-        $header.Foreground = '#93c5fd'; $header.FontSize = 13; $header.FontWeight = 'Bold'
-        $header.Margin = (New-Object System.Windows.Thickness 0,12,0,6)
-        $ctrls.tweakContainer.Children.Add($header) | Out-Null
+            $header = New-Object System.Windows.Controls.TextBlock
+            $header.Text = "$catName ($($catTweaks.Count))"
+            $header.Foreground = '#93c5fd'; $header.FontSize = 13; $header.FontWeight = 'Bold'
+            $header.Margin = (New-Object System.Windows.Thickness 0,12,0,6)
+            $ctrls.tweakContainer.Children.Add($header) | Out-Null
 
-        foreach ($t in $catTweaks) {
-            $row = Build-TweakRow -Tweak $t
-            $ctrls.tweakContainer.Children.Add($row) | Out-Null
+            foreach ($t in $catTweaks) {
+                $row = Build-TweakRow -Tweak $t
+                $ctrls.tweakContainer.Children.Add($row) | Out-Null
+            }
         }
     }
 
     $total = $Global:Tweaks.Count
-    $okCnt = 0; $needCnt = 0
-    foreach ($t in $Global:Tweaks) {
-        $st = & $t.StatusFn
-        if ($st -eq 'OK') { $okCnt++ }
-        elseif ($st -eq 'WARN' -or $st -eq 'BAD') { $needCnt++ }
-    }
+    $okCnt = @($tweakStatuses.Values | Where-Object { $_ -eq 'OK' }).Count
+    $needCnt = @($tweakStatuses.Values | Where-Object { $_ -eq 'WARN' -or $_ -eq 'BAD' }).Count
     $sel = @($Global:TweakSelection.GetEnumerator() | Where-Object { $_.Value }).Count
-    $ctrls.lblTweakInfo.Text = "$okCnt von $total angewendet  |  $needCnt offen  |  $sel selektiert"
+
+    # Filter-Button-Labels mit Counts
+    $ctrls.btnFilterAll.Content = "Alle ($total)"
+    $ctrls.btnFilterOpen.Content = "Offen ($needCnt)"
+    $ctrls.btnFilterDone.Content = "Angewendet ($okCnt)"
+
+    Update-FilterButtonStyles
+
+    # Info-Zeile (vorhandene Last-Apply-Info aus Global state behalten)
+    $base = "$okCnt von $total angewendet  |  $needCnt offen  |  $sel selektiert  |  Filter: $($Global:TweakFilter)"
+    if ($Global:LastApplyInfo) {
+        $ctrls.lblTweakInfo.Text = "$base`n$($Global:LastApplyInfo)"
+    } else {
+        $ctrls.lblTweakInfo.Text = $base
+    }
 }
 
 $ctrls.btnRefreshTweaks.Add_Click({ Update-TweaksTab; Update-StatusGrid })
+
+$ctrls.btnFilterAll.Add_Click({ $Global:TweakFilter = 'all'; Update-TweaksTab })
+$ctrls.btnFilterOpen.Add_Click({ $Global:TweakFilter = 'open'; Update-TweaksTab })
+$ctrls.btnFilterDone.Add_Click({ $Global:TweakFilter = 'done'; Update-TweaksTab })
 
 $ctrls.btnSelectAll.Add_Click({
     foreach ($t in $Global:Tweaks) {
@@ -2302,38 +2371,71 @@ $ctrls.btnSelectNone.Add_Click({
     Update-TweaksTab
 })
 
+function Show-ApplyResult {
+    param([string]$Title, [array]$AppliedNames, [array]$FailedNames)
+    $applied = @($AppliedNames).Count
+    $failed = @($FailedNames).Count
+    $summary = "$applied angewendet, $failed Fehler"
+
+    $msg = $summary
+    if ($AppliedNames.Count -gt 0) {
+        $msg += "`n`nErfolgreich:`n  + " + ($AppliedNames -join "`n  + ")
+    }
+    if ($FailedNames.Count -gt 0) {
+        $msg += "`n`nFehlgeschlagen:`n  x " + ($FailedNames -join "`n  x ")
+        $msg += "`n`nDetails: Logs im Settings-Tab oeffnen"
+    }
+
+    # Persistente Info-Zeile
+    $ts = Get-Date -Format 'HH:mm:ss'
+    $Global:LastApplyInfo = "Letzte Apply-Session ($ts): $summary"
+    if ($AppliedNames.Count -gt 0) {
+        $shortList = if ($AppliedNames.Count -le 3) { $AppliedNames -join ', ' } else { ($AppliedNames | Select-Object -First 3) -join ', ' + "..." }
+        $Global:LastApplyInfo += " | OK: $shortList"
+    }
+    if ($FailedNames.Count -gt 0) {
+        $Global:LastApplyInfo += " | FEHLER: " + ($FailedNames -join ', ')
+    }
+
+    $icon = if ($failed -gt 0) { 'Warning' } else { 'Information' }
+    [System.Windows.MessageBox]::Show($msg, $Title, 'OK', $icon) | Out-Null
+}
+
 $ctrls.btnApplySelected.Add_Click({
     $selectedIds = @($Global:TweakSelection.GetEnumerator() | Where-Object { $_.Value } | ForEach-Object { $_.Key })
     if ($selectedIds.Count -eq 0) {
         [System.Windows.MessageBox]::Show('Nichts ausgewaehlt. Erst Checkboxen setzen oder "Select All" benutzen.', 'Hinweis', 'OK', 'Information') | Out-Null
         return
     }
-    $applied = 0; $failed = 0; $failedNames = @()
+    $appliedNames = @(); $failedNames = @()
     foreach ($id in $selectedIds) {
         $tw = $Global:Tweaks | Where-Object { $_.Id -eq $id } | Select-Object -First 1
         if ($tw) {
-            if (Invoke-TweakApply -Tweak $tw) { $applied++ } else { $failed++; $failedNames += $tw.Name }
+            if (Invoke-TweakApply -Tweak $tw) { $appliedNames += $tw.Name } else { $failedNames += $tw.Name }
         }
     }
-    $msg = "$applied angewendet, $failed Fehler"
-    if ($failedNames.Count -gt 0) { $msg += "`n`nFehler bei:`n" + ($failedNames -join "`n") + "`n`nDetails: Logs im Settings-Tab" }
-    [System.Windows.MessageBox]::Show($msg, 'Apply Selected', 'OK', 'Information') | Out-Null
+    Show-ApplyResult -Title 'Apply Selected' -AppliedNames $appliedNames -FailedNames $failedNames
     Update-TweaksTab; Update-StatusGrid
 })
 
 $ctrls.btnApplyAll.Add_Click({
-    $confirm = [System.Windows.MessageBox]::Show("Wendet alle Tweaks mit Status WARN/BAD an (alle Kategorien).`n`nFuer jeden Tweak wird ein Snapshot vor Apply gespeichert (Revert spaeter moeglich).`n`nWeiter?", 'Apply All - Bestaetigung', 'YesNo', 'Question')
-    if ($confirm -ne 'Yes') { return }
-    $applied = 0; $failed = 0; $failedNames = @()
-    foreach ($t in $Global:Tweaks) {
-        $st = & $t.StatusFn
-        if ($st -eq 'WARN' -or $st -eq 'BAD') {
-            if (Invoke-TweakApply -Tweak $t) { $applied++ } else { $failed++; $failedNames += $t.Name }
-        }
+    # Zaehle erst die offenen Tweaks fuer aussagekraeftige Bestaetigung
+    $openTweaks = @($Global:Tweaks | Where-Object {
+        $st = & $_.StatusFn
+        $st -eq 'WARN' -or $st -eq 'BAD'
+    })
+    if ($openTweaks.Count -eq 0) {
+        [System.Windows.MessageBox]::Show('Alle Tweaks sind bereits OK. Nichts zu tun.', 'Apply All', 'OK', 'Information') | Out-Null
+        return
     }
-    $msg = "$applied angewendet, $failed Fehler"
-    if ($failedNames.Count -gt 0) { $msg += "`n`nFehler bei:`n" + ($failedNames -join "`n") }
-    [System.Windows.MessageBox]::Show($msg, 'Apply All', 'OK', 'Information') | Out-Null
+    $listPreview = ($openTweaks | ForEach-Object { "  - $($_.Name)" }) -join "`n"
+    $confirm = [System.Windows.MessageBox]::Show("$($openTweaks.Count) Tweaks werden angewendet:`n`n$listPreview`n`nFuer jeden wird ein Snapshot vor Apply gespeichert (Revert spaeter moeglich).`n`nWeiter?", 'Apply All - Bestaetigung', 'YesNo', 'Question')
+    if ($confirm -ne 'Yes') { return }
+    $appliedNames = @(); $failedNames = @()
+    foreach ($t in $openTweaks) {
+        if (Invoke-TweakApply -Tweak $t) { $appliedNames += $t.Name } else { $failedNames += $t.Name }
+    }
+    Show-ApplyResult -Title 'Apply All' -AppliedNames $appliedNames -FailedNames $failedNames
     Update-TweaksTab; Update-StatusGrid
 })
 

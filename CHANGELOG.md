@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.4-beta] - 2026-05-12
+### Added — Tweaks-Tab UX
+- Filter-Buttons: "Alle (X)" / "Offen (X)" / "Angewendet (X)" - aktiver Filter visuell markiert
+- Default-Filter ist "Offen" beim Suite-Start - zeigt sofort was zu tun ist
+- Apply-Resultat (Apply Selected / Apply All / per-Row Apply): MessageBox listet jetzt namentlich was angewendet wurde und was gefehlt hat
+- Persistente "Letzte Apply-Session"-Zeile unter den Info-Statistiken bleibt sichtbar bis zum nächsten Tab-Wechsel
+- "Apply All" Bestätigungs-Dialog listet vor der Aktion alle zu applizierenden Tweaks auf
+- Empty-State: Wenn alle Tweaks OK sind und Filter "Offen" gewählt → grüner Hinweis "+ Alle Tweaks angewendet"
+
+### Improved
+- Status-Berechnung pro Tab-Update einmalig in $tweakStatuses Cache (vermeidet n+1-Aufrufe der StatusFn)
+
 ## [0.9.3-beta] - 2026-05-12
 ### Fixed
 - Header-Version war seit Anfang hardcoded auf "v1.0.0-PoC" im XAML statt aus $Global:Suite.Version gelesen
