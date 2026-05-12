@@ -14,6 +14,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.11.2-beta] - 2026-05-12
+### Fixed — About-Card Hardcoded Version + veralteter Text
+- Settings-Tab > About zeigte hardcoded `v1.0.0-PoC (Local Build)` - selber Bug-Klasse wie damals der Header-Label-Bug
+- Fix: neues `lblAboutVersion`-Element wird beim Start dynamisch aus `$Global:Suite.Version` befuellt
+- Veralteter Text "Geplant: GitHub-Release fuer Multi-User-Distribution" - das haben wir laengst. Ersetzt durch:
+  - GitHub-Repo-Link
+  - Aktueller `irm | iex` Update-Command direkt in der Card
+  - Erweiterte Sektion: "Reversibel: 14 von 15 Tweaks", "BattlEye-safe: kein Special K, ReShade, DXVK, ban-bait Engine.ini, kein Process-Lasso auf BEService"
+
+### Changed — History-Stat Label klarer
+- Vorher: "History: 9 Eintraege - 9 Apply, 0 Revert, 0 Fehler"  →  verwirrte User weil im Tweaks-Tab "13 von 15 angewendet" steht
+- Klarstellung im Label: "(Hinweis: Tweaks die schon by-default OK waren brauchten kein Apply und tauchen nicht in der History auf.)"
+
+### Changed — README komplett ueberarbeitet (Trust-Foundation fuer Distribution)
+- Neue Section "Warum diesem Tool vertrauen?" ganz oben - 3 Punkte: Open Source, vollstaendig reversibel, BattlEye-safe by design
+- Klare Telemetrie-Aussage: "Keine Telemetrie, keine Cloud-Calls. Internet-Traffic nur fuer einmalige Tool-Downloads + Diagnose-Pings"
+- Screenshots-Section mit 5 Slots (Dashboard, Tweaks, Game Mode, Capture, Settings) - Screenshots in `docs/screenshots/` ablegen
+- Tweak-Liste aktualisiert auf 15 (war 14, HAGS dazugekommen in 0.11.0)
+- Status-Footer aktualisiert auf 0.11.1
+
 ## [0.11.1-beta] - 2026-05-12
 ### Fixed — VBS-StatusCheck zu streng (false BAD nach erfolgreichem Apply)
 

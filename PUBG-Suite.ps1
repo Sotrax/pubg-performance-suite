@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.11.1-beta'
+    Version    = '0.11.2-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1882,20 +1882,27 @@ Add-Type -AssemblyName System.Windows.Forms
                                 <TextBlock Text="About" Style="{StaticResource SectionHeader}"/>
                                 <TextBlock Foreground="#d1d5db" TextWrapping="Wrap" LineHeight="20">
                                     <Run Text="PUBG Performance Suite" FontWeight="SemiBold"/>
-                                    <Run Text="  -  v1.0.0-PoC (Local Build)"/>
+                                    <Run x:Name="lblAboutVersion" Text=""/>
                                     <LineBreak/><LineBreak/>
-                                    <Run Text="Diese Suite konsolidiert alle PUBG-Competitive-Tweaks die wir in der Diagnose v6 identifiziert haben." Foreground="#9ca3af"/>
+                                    <Run Text="Open Source PowerShell-WPF Tool fuer PUBG-Competitive-Tuning. BattlEye-safe, vollstaendig reversibel, keine externen Dependencies ausser auto-installierten Open-Source-Helpern (PresentMon, MultiMonitorTool, NPI)." Foreground="#9ca3af"/>
+                                    <LineBreak/><LineBreak/>
+                                    <Run Text="Repo:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="  github.com/Sotrax/pubg-performance-suite"/>
                                     <LineBreak/>
-                                    <Run Text="Geplant: GitHub-Release fuer Multi-User-Distribution mit irm | iex Bootstrap." Foreground="#9ca3af"/>
+                                    <Run Text="Update:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text='  irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex'/>
                                     <LineBreak/><LineBreak/>
                                     <Run Text="Auto-Detection:" FontWeight="SemiBold" Foreground="#93c5fd"/>
                                     <Run Text="  Monitor-Hz, PUBG-Steam-Pfad, dedizierte GPU, Energieplan, NPI-Apply-Stamp"/>
                                     <LineBreak/>
                                     <Run Text="Backups:" FontWeight="SemiBold" Foreground="#93c5fd"/>
-                                    <Run Text="  Tweaks legen .bak_&lt;timestamp&gt; neben das Original an"/>
+                                    <Run Text="  Tweaks legen .bak_&lt;timestamp&gt; neben das Original an, Registry-Snapshots in history.json"/>
                                     <LineBreak/>
-                                    <Run Text="Sicher:" FontWeight="SemiBold" Foreground="#93c5fd"/>
-                                    <Run Text="  Keine BattlEye-Risk-Tweaks (kein Special K, ReShade, DXVK, ban-bait Engine.ini)"/>
+                                    <Run Text="Reversibel:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="  14 von 15 Tweaks per Klick rueckgaengig (NV-Profil nutzt NPI-eigene Reset-Funktion)"/>
+                                    <LineBreak/>
+                                    <Run Text="BattlEye-safe:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="  Kein Special K, kein ReShade, kein DXVK, keine ban-bait Engine.ini CVars, kein Process-Lasso auf BEService"/>
                                 </TextBlock>
                             </StackPanel>
                         </Border>
@@ -1930,7 +1937,7 @@ foreach ($name in @('mainTabs','lblVersion','lblAdmin','adminBadge','lblTopStatu
     'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapRebuild','btnCapClearHist','lblCapHistInfo','capHistoryList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
-    'lblPaths','tbMonitorPattern','lblFooter')) {
+    'lblPaths','tbMonitorPattern','lblFooter','lblAboutVersion')) {
     $ctrls[$name] = $window.FindName($name)
 }
 
@@ -2307,7 +2314,7 @@ function Update-HistoryStat {
         $applies = @($entries | Where-Object { $_.Action -eq 'Apply' -and $_.Success }).Count
         $reverts = @($entries | Where-Object { $_.Action -eq 'Revert' -and $_.Success }).Count
         $errors = @($entries | Where-Object { -not $_.Success }).Count
-        $ctrls.lblHistoryStat.Text = "History: $($entries.Count) Eintraege - $applies Apply, $reverts Revert, $errors Fehler"
+        $ctrls.lblHistoryStat.Text = "History (Suite-Aktionen): $($entries.Count) Eintraege - $applies Apply, $reverts Revert, $errors Fehler. (Hinweis: Tweaks die schon by-default OK waren brauchten kein Apply und tauchen nicht in der History auf.)"
     } catch { $ctrls.lblHistoryStat.Text = '' }
 }
 
@@ -3733,9 +3740,12 @@ if ($hist.Count -gt 0) {
     Show-CapResult $displayResult
 }
 
-# Version im Header dynamisch (aus $Global:Suite.Version statt hardcoded)
+# Version dynamisch in Header, Window-Title und About-Card (vermeidet "v1.0.0-PoC" Bug)
 $ctrls.lblVersion.Text = "v$($Global:Suite.Version)"
 $window.Title = "PUBG Performance Suite v$($Global:Suite.Version)"
+if ($ctrls.lblAboutVersion) {
+    $ctrls.lblAboutVersion.Text = "  -  v$($Global:Suite.Version)"
+}
 
 # Admin-Badge initial setzen
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
