@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.11.0-beta'
+    Version    = '0.11.1-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -229,15 +229,26 @@ function Restore-FileFromBackup {
 function Get-LiveStatus {
     $s = [ordered]@{}
 
-    # VBS + HVCI (zusammen)
+    # VBS + HVCI (zusammen) - korrekte Hierarchie:
+    # - SecurityServicesRunning enthaelt 2 = HVCI aktiv (kostet 5-10% FPS) -> BAD
+    # - SecurityServicesRunning enthaelt 1 = Credential Guard aktiv -> BAD
+    # - VirtualizationBasedSecurityStatus=2 aber keine Services = nur Hypervisor-Stack laeuft (~1-3% SLAT) -> WARN
+    # - alles aus -> OK
     try {
         $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction Stop
-        $vbsRunning = ($dg.VirtualizationBasedSecurityStatus -eq 2)
-        $hvciRunning = ($dg.SecurityServicesRunning -contains 2)
-        if ($hvciRunning) {
-            $s['HVCI'] = @{ Value='HVCI + VBS aktiv'; Status='BAD' }
-        } elseif ($vbsRunning) {
-            $s['HVCI'] = @{ Value='VBS aktiv (HVCI aus)'; Status='WARN' }
+        $running = @($dg.SecurityServicesRunning)
+        $hvciOn = $running -contains 2
+        $credGuardOn = $running -contains 1
+        $hyperVUp = ($dg.VirtualizationBasedSecurityStatus -eq 2)
+        if ($hvciOn -and $credGuardOn) {
+            $s['HVCI'] = @{ Value='HVCI + CredGuard aktiv'; Status='BAD' }
+        } elseif ($hvciOn) {
+            $s['HVCI'] = @{ Value='HVCI aktiv'; Status='BAD' }
+        } elseif ($credGuardOn) {
+            $s['HVCI'] = @{ Value='CredGuard aktiv'; Status='BAD' }
+        } elseif ($hyperVUp) {
+            # Services aus, aber Hypervisor noch geladen - kleinerer Performance-Impact
+            $s['HVCI'] = @{ Value='Hypervisor an (Services aus)'; Status='WARN' }
         } else {
             $s['HVCI'] = @{ Value='AUS'; Status='OK' }
         }
@@ -853,10 +864,17 @@ $Global:Tweaks = @(
         StatusFn = {
             try {
                 $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction Stop
-                # VirtualizationBasedSecurityStatus: 0=Off, 1=Configured/NotRunning, 2=Running
-                $vbsRunning = ($dg.VirtualizationBasedSecurityStatus -eq 2)
-                $hvciRunning = ($dg.SecurityServicesRunning -contains 2)
-                if ($vbsRunning -or $hvciRunning) { 'BAD' } else { 'OK' }
+                # Korrekte Logik:
+                # - HVCI oder CredGuard laufen -> BAD (volle 5-10% Penalty)
+                # - Nur Hypervisor laeuft, Services aus -> WARN (~1-3% SLAT, nur via UEFI/bcdedit komplett aus)
+                # - Alles aus -> OK
+                $running = @($dg.SecurityServicesRunning)
+                $hvciOn = $running -contains 2
+                $credGuardOn = $running -contains 1
+                $hyperVUp = ($dg.VirtualizationBasedSecurityStatus -eq 2)
+                if ($hvciOn -or $credGuardOn) { 'BAD' }
+                elseif ($hyperVUp) { 'WARN' }
+                else { 'OK' }
             } catch { 'SKIP' }
         }
         SnapshotFn = {
@@ -1943,7 +1961,8 @@ function Update-StatusGrid {
     # Recommendation-Engine: pro Befund eine visuelle Card mit Severity + Tab-Sprung
     # Tab-Index: 0=Dashboard, 1=Tweaks, 2=Game Mode, 3=Capture, 4=Diagnose, 5=Settings (nach Reorder)
     $recos = @()
-    if ($live['HVCI'].Status -ne 'OK')         { $recos += @{ Sev='BAD';  Title='VBS / HVCI ist AN'; Detail='Virtualization-Based Security deaktivieren - groesster FPS-Hebel (5-10% laut Toms Hardware). Tweak: "Virtualization Security (VBS + HVCI): AUS"'; TabIdx=1 } }
+    if ($live['HVCI'].Status -eq 'BAD')         { $recos += @{ Sev='BAD';  Title='HVCI / Credential Guard ist AN'; Detail='Memory Integrity bzw. CredGuard laeuft - kostet 5-10% FPS in CPU-bound Games (Toms Hardware). Tweak: "Virtualization Security (VBS + HVCI): AUS"'; TabIdx=1 } }
+    if ($live['HVCI'].Status -eq 'WARN')        { $recos += @{ Sev='WARN'; Title='Hypervisor-Stack laeuft noch'; Detail='HVCI + CredGuard sind aus (Suite-Tweak hat funktioniert!), aber Win11 24H2 startet den Hypervisor trotzdem (~1-3% SLAT-Overhead). Vollstaendig aus nur via UEFI/BIOS-Setting "Virtualization-based Security" deaktivieren ODER UEFI Secure Boot pruefen. Optional - kostet wenig'; TabIdx=0 } }
     if ($live['Energieplan'].Status -ne 'OK')  { $recos += @{ Sev='WARN'; Title='Energieplan nicht Maximum'; Detail='Auf Hoechstleistung wechseln - haelt CPU-Frequenz auf Vollgas'; TabIdx=1 } }
     if ($live['GameDVR'].Status -ne 'OK')      { $recos += @{ Sev='BAD';  Title='Xbox Game DVR ist AN'; Detail='Game Bar Recording laeuft im Hintergrund mit. Tweak: "Game DVR AUS"'; TabIdx=1 } }
     if ($live['RTSS'].Status -ne 'OK')         { $recos += @{ Sev='WARN'; Title='RTSS laeuft'; Detail='Erzwingt Present-Mode 5 (Composed Copy, ~3-5ms Overhead). Game-Mode-Start killt es automatisch'; TabIdx=2 } }

@@ -14,6 +14,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.11.1-beta] - 2026-05-12
+### Fixed — VBS-StatusCheck zu streng (false BAD nach erfolgreichem Apply)
+
+User-Bug: nach Apply des "VBS + HVCI Disable"-Tweaks und Reboot zeigte der
+Tweak weiter WARN/BAD - obwohl der Tweak technisch erfolgreich war. 
+Diagnose mit `Get-ComputerInfo` zeigte: `DeviceGuardSmartStatus = Off`,
+`SecurityServicesRunning = {0}` (nichts laeuft), `SecurityServicesConfigured = {0}`
+- alles korrekt aus.
+
+Aber: `Win32_DeviceGuard.VirtualizationBasedSecurityStatus = 2` (Running).
+Das ist NICHT "VBS aktiv" sondern nur "Hypervisor-Stack geladen". 24H2 startet
+den Hyper-V-Hypervisor auch wenn HVCI/CredGuard aus sind - ist UEFI/SecureBoot-
+abhaengig und nicht per Registry abschaltbar. Der reine Hypervisor-Stack kostet
+~1-3% SLAT-Overhead, nicht die 5-10% von HVCI/CredGuard.
+
+**StatusFn-Hierarchie korrigiert (sowohl Tweak als auch Dashboard-Card):**
+- `SecurityServicesRunning -contains 2` (HVCI) -> **BAD** (volle Penalty)
+- `SecurityServicesRunning -contains 1` (CredGuard) -> **BAD**
+- Nur `VirtualizationBasedSecurityStatus = 2` ohne Services -> **WARN**
+  (Hypervisor laeuft noch, kleiner Overhead, vollstaendig aus nur via UEFI)
+- Alles aus -> **OK**
+
+**Dashboard-Card** differenziert jetzt: "HVCI + CredGuard aktiv" / "HVCI aktiv" /
+"CredGuard aktiv" / "Hypervisor an (Services aus)" / "AUS"
+
+**Recommendation-Engine** macht jetzt 2 separate Empfehlungen:
+- Bei BAD: Tweak applieren
+- Bei WARN: erklaert dass der Tweak schon gewirkt hat, der Rest UEFI-Setting
+
 ## [0.11.0-beta] - 2026-05-12
 ### Added — 2025/2026-Research Sprint 1 (3 evidenz-basierte Tweaks)
 
