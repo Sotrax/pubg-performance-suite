@@ -14,6 +14,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.10.1-beta] - 2026-05-12
+### Fixed — Capture Tab Display-Bugs nach 0.9.7-Erweiterung
+- Neue Metriken (Bottleneck, CPU Busy, GPU Busy, Render Latency, Until Displayed, Click-to-Photon) zeigten beim Suite-Start "NA" obwohl die CSV-Daten existierten - Ursache: beim Start wurde der letzte History-Eintrag direkt gerendert, alte Eintraege (aus 0.9.6 und davor) hatten diese Felder schlicht nicht im JSON. Fix: wenn die CSV noch existiert wird sie beim Suite-Start neu mit `Analyze-CaptureCSV` analysiert und das frische Ergebnis angezeigt (statt der gespeicherten History-Zeile)
+- Trend-Tabelle MODE-Spalte: zeigte `Mode Hardware: Legacy Flip` weil der hardcoded "Mode "-Praefix vor dem PresentMon-v2-String stand. Praefix entfernt, Mode-Spalte von 80px auf 200px verbreitert damit der volle Name nicht in die DELTA-Spalte ueberlaeuft
+- Trend-Tabelle DELTA-Spalte: war neben dem Mode-Text geklebt weil Mode-Spalte zu schmal - jetzt klar getrennt
+- Hauptanzeige "PRESENT MODE": defensiv `^Mode\s+` Praefix-Strip falls alte History-Daten geladen werden
+
+### Changed — Present Mode Quality-Hierarchie verfeinert + visuell aufgewertet
+Auf User-Wunsch ("Legacy Flip ist optimal - das soll auch gruen sein"):
+- Neue Stufe **BEST** in der `PresentModeQuality`-Bewertung:
+  - `BEST` (knallgruen `#22c55e` + `✓ OPTIMAL`-Badge): `Hardware: Independent Flip`, `Hardware: Legacy Flip` - kein DWM-Compose im Pfad
+  - `OK` (normales Gruen `#4ade80`): `Hardware Composed: Flip`, `Hardware: Legacy Copy` - geringer DWM-Overhead
+  - `WARN` (gelb): `Composition Atlas`
+  - `BAD` (rot): `Composed Copy with GPU GDI` - ~3-5ms Latency
+- Erklaerungstext unter dem Mode-Namen bekommt jetzt Severity-Farbe (gruene Toene fuer OK/BEST, gelb fuer WARN, rot fuer BAD) statt nur grau
+- Trend-Tabelle MODE-Spalte: Mode-Text in der jeweiligen Severity-Farbe
+- Mode-Card-Header umformuliert: "PRESENT MODE (Independent / Legacy Flip = OPTIMAL  -  Composed Copy = BAD, ~3-5ms DWM-Overhead)"
+- Metriken-Expander: PRESENT MODE-Abschnitt zeigt jetzt die Hierarchie in farbig formatierten Unterzeilen statt einem Wall-of-Text-Absatz
+
 ## [0.10.0-beta] - 2026-05-12
 ### Changed — Dashboard- und UX-Overhaul
 

@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.10.0-beta'
+    Version    = '0.10.1-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1553,8 +1553,8 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <!-- Row 3: Present Mode mit Erklaerung (volle Breite) -->
                                     <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4" Background="#0f1115" CornerRadius="4" Padding="12,10" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="PRESENT MODE  (Mode 1/3/4 = OK / Mode 5 = BAD = legacy DWM-Compose ~3-5ms Overhead)" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                            <TextBlock Text="PRESENT MODE   (Independent / Legacy Flip = OPTIMAL    -    Composed Copy = BAD, ~3-5ms DWM-Overhead)" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="#e5e7eb" FontSize="15" FontWeight="Bold" TextWrapping="Wrap" Margin="0,3,0,0"/>
                                             <TextBlock x:Name="lblCapPresentExplain" Text="" Foreground="#6b7280" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </Border>
@@ -1596,8 +1596,17 @@ Add-Type -AssemblyName System.Windows.Forms
                                                     <Run> - Vollstaendige End-to-End-Latency Maus-Click bis sichtbare Reaktion. Nur verfuegbar bei NVIDIA Reflex (PUBG hat keinen direkten Reflex-Support - daher meist "NA").</Run>
                                                 </TextBlock>
                                                 <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">PRESENT MODE</Run>
-                                                    <Run> - Wie Windows den Frame an den Monitor uebergibt. Hardware Independent Flip (Exclusive FS) und Hardware Legacy Flip = optimal. Composed Copy = DWM-Compositor laeuft mit, ~3-5ms zusaetzliche Latenz - meist verursacht durch laufendes RTSS, falsche DPI-Skalierung oder Multi-Monitor-Setup.</Run>
+                                                    <Run FontWeight="Bold" Foreground="#22c55e">PRESENT MODE</Run>
+                                                    <Run> - Wie Windows den Frame an den Monitor uebergibt. Hierarchie:</Run>
+                                                    <LineBreak/>
+                                                    <Run FontWeight="Bold" Foreground="#22c55e">  - Hardware: Independent Flip  /  Hardware: Legacy Flip  =  OPTIMAL</Run>
+                                                    <Run Foreground="#9ca3af"> (kein DWM-Compositor zwischendrin)</Run>
+                                                    <LineBreak/>
+                                                    <Run FontWeight="Bold" Foreground="#4ade80">  - Hardware Composed: Flip  /  Hardware: Legacy Copy  =  OK</Run>
+                                                    <Run Foreground="#9ca3af"> (geringer DWM-Overhead)</Run>
+                                                    <LineBreak/>
+                                                    <Run FontWeight="Bold" Foreground="#f87171">  - Composed: Copy with GPU GDI  =  BAD</Run>
+                                                    <Run Foreground="#9ca3af"> (~3-5ms zusaetzliche Latenz - meist durch laufendes RTSS, falsche DPI-Skalierung oder Multi-Monitor-Setup)</Run>
                                                 </TextBlock>
                                                 <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
                                                     <Run FontWeight="Bold" Foreground="#e5e7eb">G-SYNC</Run>
@@ -2560,11 +2569,14 @@ function Analyze-CaptureCSV {
                 $pmTopName = $modeGroups[0].Name
             }
         }
-        # Quality + Friendly-Label per Wildcard-Match auf String
+        # Quality + Friendly-Label per Wildcard-Match auf String.
+        # BEST = optimal (Independent/Legacy Flip - kein DWM-Compose),
+        # OK = akzeptabel (Composed Flip/Legacy Copy - geringer DWM-Overhead),
+        # WARN = unguenstig, BAD = ~3-5ms Latency-Overhead
         $pmRaw = if ($pmTopName) { [string]$pmTopName } else { '' }
         $modeQuality = switch -Wildcard ($pmRaw) {
-            '*Independent Flip*' { 'OK' }
-            '*Legacy Flip*'      { 'OK' }
+            '*Independent Flip*' { 'BEST' }
+            '*Legacy Flip*'      { 'BEST' }
             '*Composed Flip*'    { 'OK' }
             '*Legacy Copy*'      { 'OK' }
             '*Composed Copy*'    { 'BAD' }
@@ -2575,11 +2587,12 @@ function Analyze-CaptureCSV {
         $modeLabel = if ($pmRaw) { $pmRaw } else { 'unbekannt' }
         # Konkrete Erklaerung pro Mode
         $modeExplain = switch -Wildcard ($pmRaw) {
-            '*Independent Flip*' { 'Exclusive Fullscreen - direkter GPU->Display Pfad, niedrigste Latency' }
-            '*Legacy Flip*'      { 'Hardware Direct Flip - niedrige Latency (kein DWM)' }
-            '*Composed Flip*'    { 'Borderless Flip-Model - modern, gute Latency via DWM' }
-            '*Legacy Copy*'      { 'Hardware Copy - akzeptabel' }
-            '*Composed Copy*'    { 'Legacy DWM-Compose - HOECHSTE Latency (~3-5ms Overhead). RTSS/Multi-Monitor/Falsche Settings?' }
+            '*Independent Flip*' { 'OPTIMAL - Exclusive Fullscreen, direkter GPU->Display Pfad, niedrigste Latency' }
+            '*Legacy Flip*'      { 'OPTIMAL - Hardware Direct Flip, niedrige Latency, KEIN DWM-Compose-Overhead' }
+            '*Composed Flip*'    { 'OK - Borderless Flip-Model, modern, gute Latency via DWM' }
+            '*Legacy Copy*'      { 'OK - Hardware Copy, akzeptabel' }
+            '*Composed Copy*'    { 'BAD - Legacy DWM-Compose, HOECHSTE Latency (~3-5ms Overhead). RTSS / Multi-Monitor / falsche Settings?' }
+            '*Composition Atlas*' { 'WARN - ungewoehnlich, eventuell Treiber-Bug oder DWM-Mode-Switch beobachtet' }
             default              { '' }
         }
 
@@ -3130,15 +3143,32 @@ function Show-CapResult {
     }
 
     # Present Mode (Hauptzeile - voller Name) + Erklaerung darunter
-    $ctrls.lblCapPresentMode.Text = $Result.PresentModeLabel
+    # Strip "Mode "-Praefix falls aus alter History (hardcoded vor 0.10.1)
+    $modeLbl = if ($Result.PresentModeLabel) { [string]$Result.PresentModeLabel } else { 'unbekannt' }
+    $modeLbl = $modeLbl -replace '^Mode\s+',''
+    # BEST-Modi bekommen "OPTIMAL"-Praefix visualisiert
+    $displayLbl = switch ($Result.PresentModeQuality) {
+        'BEST' { "$modeLbl    ✓ OPTIMAL" }
+        default { $modeLbl }
+    }
+    $ctrls.lblCapPresentMode.Text = $displayLbl
     $modeColor = switch ($Result.PresentModeQuality) {
-        'OK'   { '#4ade80' }
+        'BEST' { '#22c55e' }   # knalliges Gruen (Bestnote)
+        'OK'   { '#4ade80' }   # normales Gruen
         'WARN' { '#fbbf24' }
         'BAD'  { '#f87171' }
         default{ '#e5e7eb' }
     }
     $ctrls.lblCapPresentMode.Foreground = $modeColor
+    # Erklaerungstext in passender Severity-Farbe (BEST/OK gruen-ish, sonst normal grau)
     $ctrls.lblCapPresentExplain.Text = if ($Result.PresentModeExplain) { $Result.PresentModeExplain } else { '' }
+    $ctrls.lblCapPresentExplain.Foreground = switch ($Result.PresentModeQuality) {
+        'BEST' { '#86efac' }
+        'OK'   { '#86efac' }
+        'WARN' { '#fcd34d' }
+        'BAD'  { '#fca5a5' }
+        default{ '#9ca3af' }
+    }
 
     # Bottleneck mit Farbcode
     if ($Result.Bottleneck) {
@@ -3225,13 +3255,14 @@ function Update-CapHistory {
         }
         $ctrls.lblCapHistInfo.Text = "$($hist.Count) Messung(en) gespeichert - Top 8 angezeigt. Klick auf eine Zeile = CSV oeffnen."
 
-        # Header-Row
+        # Header-Row - Spalten: Date(110), Avg(55), 1%(55), 0.1%(55), StdDev(55), Mode(200), Delta(70)
+        $colWidths = @(110,55,55,55,55,200,70)
         $hdr = New-Object System.Windows.Controls.Border
         $hdr.Background = '#0f1115'; $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
         $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
         $hdrGrid = New-Object System.Windows.Controls.Grid
         $hdr.Child = $hdrGrid
-        foreach ($w in 110,55,55,55,55,80,80) {
+        foreach ($w in $colWidths) {
             $cd = New-Object System.Windows.Controls.ColumnDefinition
             $cd.Width = $w; $hdrGrid.ColumnDefinitions.Add($cd) | Out-Null
         }
@@ -3268,7 +3299,7 @@ function Update-CapHistory {
 
                 $grid = New-Object System.Windows.Controls.Grid
                 $row.Child = $grid
-                foreach ($w in 110,55,55,55,55,80,80) {
+                foreach ($w in $colWidths) {
                     $cd = New-Object System.Windows.Controls.ColumnDefinition
                     $cd.Width = $w; $grid.ColumnDefinitions.Add($cd) | Out-Null
                 }
@@ -3284,16 +3315,32 @@ function Update-CapHistory {
                     else { $deltaColor = '#fbbf24' }
                 }
 
+                # Mode-Label: PresentMon v2 schreibt schon Strings wie "Hardware: Legacy Flip".
+                # Alte History-Eintraege koennten "Mode " hardcoded davor haben - kuerze das raus.
+                $modeStr = if ($e.PresentModeLabel) { [string]$e.PresentModeLabel }
+                           elseif ($e.PresentMode) { [string]$e.PresentMode }
+                           else { '?' }
+                $modeStr = $modeStr -replace '^Mode\s+',''
+                # Mode-Farbe nach Quality (BEST=knall-gruen, OK=gruen, WARN=gelb, BAD=rot)
+                $modeColor = switch -Wildcard ($modeStr) {
+                    '*Independent Flip*'  { '#22c55e' }
+                    '*Legacy Flip*'       { '#22c55e' }
+                    '*Composed Flip*'     { '#4ade80' }
+                    '*Legacy Copy*'       { '#4ade80' }
+                    '*Composed Copy*'     { '#f87171' }
+                    '*Composition Atlas*' { '#fbbf24' }
+                    default               { '#e5e7eb' }
+                }
                 $vals = @(
                     (Format-CapTimeShort $e.CaptureTime),
                     "$($e.AvgFps)",
                     "$($e.OnePctLow)",
                     "$($e.ZeroOnePctLow)",
                     "$($e.StdDevMs)",
-                    $(if ($e.PresentMode) { "Mode $($e.PresentMode)" } else { '?' }),
+                    $modeStr,
                     $delta
                 )
-                $cols = @('#d1d5db','#4ade80','#fbbf24','#f87171','#60a5fa','#e5e7eb',$deltaColor)
+                $cols = @('#d1d5db','#4ade80','#fbbf24','#f87171','#60a5fa',$modeColor,$deltaColor)
                 for ($i = 0; $i -lt 7; $i++) {
                     $tb = New-Object System.Windows.Controls.TextBlock
                     $tb.Text = "$($vals[$i])"; $tb.Foreground = $cols[$i]; $tb.FontSize = 11
@@ -3569,11 +3616,18 @@ $ctrls.btnCapClearHist.Add_Click({
 
 Update-CapToolStatus
 Update-CapHistory
-# Beim Start: letztes Ergebnis aus History laden falls vorhanden
+# Beim Start: letztes Ergebnis anzeigen. Wenn die CSV noch existiert, neu analysieren
+# (alte History-Eintraege haben keine Bottleneck/CpuBusy/GpuBusy/RenderLat-Felder).
 $hist = @(Get-CaptureHistory)
 if ($hist.Count -gt 0) {
-    $Global:CaptureState.LastResult = $hist[-1]
-    Show-CapResult $hist[-1]
+    $lastEntry = $hist[-1]
+    $freshResult = $null
+    if ($lastEntry.CsvPath -and (Test-Path $lastEntry.CsvPath)) {
+        try { $freshResult = Analyze-CaptureCSV -CsvPath $lastEntry.CsvPath } catch {}
+    }
+    $displayResult = if ($freshResult -and -not $freshResult.Error) { $freshResult } else { $lastEntry }
+    $Global:CaptureState.LastResult = $displayResult
+    Show-CapResult $displayResult
 }
 
 # Version im Header dynamisch (aus $Global:Suite.Version statt hardcoded)
