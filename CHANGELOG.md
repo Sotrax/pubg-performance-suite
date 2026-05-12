@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.8-beta] - 2026-05-12
+### Fixed — Bug-Bash nach User-Feedback "tweaks fehlen jedes mal nach Apply"
+
+**Critical (Engine.ini Tweaks "fehlen" trotz erfolgreichem Apply):**
+- PUBG ueberschreibt Engine.ini beim naechsten Spielstart/Beendigung mit seinen eigenen Default-Werten - alle unsere Performance-Tweaks waren weg, StatusFn zeigte deshalb dauerhaft WARN
+- Beweis im Repo: `Engine.ini.bak_2026-05-12_154507_902` enthielt unsere Tweaks vollstaendig, aber die Live-`Engine.ini` (LastWrite 16:01) war komplett ohne Tweaks zurueck im PUBG-Default
+- Fix: Engine.ini nach erfolgreichem Apply wird auf `FileAttributes.ReadOnly` gesetzt - PUBG kann sie nicht mehr ueberschreiben. Update-IniValue erkennt ReadOnly aus vorigem Apply und macht die Datei kurz writable, schreibt, setzt das Flag wieder
+- RevertFn entfernt ReadOnly bevor das Backup zurueck-kopiert wird
+- Dashboard zeigt jetzt "Tweaks drin (geschuetzt)" wenn ReadOnly aktiv ist
+
+**Critical (MMCSS Tweak zeigt dauerhaft WARN trotz Apply):**
+- `NetworkThrottlingIndex` wird als `REG_DWORD = 0xFFFFFFFF` geschrieben, kommt aber je nach PS-Version mal als Int32 `-1` und mal als String/Int64 `4294967295` zurueck
+- Der bisherige Vergleich `$n -eq -1 -or $n -eq 0xFFFFFFFF -or $n -eq [int32]::MaxValue` schlug bei `4294967295 -eq 0xFFFFFFFF` fehl (PS 5.1 Typ-Quirk)
+- Fix: String-Cast `"$n"` und Vergleich gegen '`-1`' / '`4294967295`' deckt beide Repraesentationen ab
+
+### Impact-Doku ergaenzt
+- Engine.ini-Tweak: Impact von 'KEIN' auf 'GERING' angehoben + ImpactDetail erklaert dass ReadOnly bedeutet "PUBG-Menue-'Reset to default' fuer Render-Settings funktioniert bis zum Revert nicht"
+
 ## [0.9.7-beta] - 2026-05-12
 ### Added — Capture Tab: Mehr Metriken + Erklaerungen
 - **Bottleneck-Analyse**: CPU-Bound / GPU-Bound / Balanced aus `MsCPUBusy` vs `MsGPUBusy`

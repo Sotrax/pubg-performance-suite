@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.7-beta'
+    Version    = '0.9.8-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -226,14 +226,17 @@ function Get-LiveStatus {
     $rtss = @(Get-Process -Name 'RTSS','RTSSHooksLoader64' -ErrorAction SilentlyContinue)
     $s['RTSS'] = if ($rtss.Count -gt 0) { @{ Value="laeuft (PID $($rtss[0].Id))"; Status='WARN' } } else { @{ Value='nicht aktiv'; Status='OK' } }
 
-    # Engine.ini Tweaks
+    # Engine.ini Tweaks (+ ReadOnly-Flag fuer PUBG-Overwrite-Schutz)
     $eng = "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\Engine.ini"
     if (Test-Path $eng) {
         $c = Get-Content $eng -Raw
         $hasSharpen = $c -match 'r\.Tonemapper\.Sharpen\s*=\s*0\.7'
         $hasStreaming = $c -match 'r\.Streaming\.PoolSize\s*=\s*4096'
+        $isReadOnly = $false
+        try { $isReadOnly = ((Get-Item $eng -Force).Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0 } catch {}
         if ($hasSharpen -and $hasStreaming) {
-            $s['Engine.ini'] = @{ Value='Tweaks drin'; Status='OK' }
+            $lbl = if ($isReadOnly) { 'Tweaks drin (geschuetzt)' } else { 'Tweaks drin' }
+            $s['Engine.ini'] = @{ Value=$lbl; Status='OK' }
         } else {
             $s['Engine.ini'] = @{ Value='Tweaks fehlen'; Status='WARN' }
         }
@@ -342,8 +345,24 @@ function Update-IniValue {
         Write-SuiteLog "Update-IniValue: Berechnetes Content zu klein/leer - kein Write" 'ERROR'
         return $false
     }
+    # Falls Datei read-only ist (z.B. nach vorherigem Apply): kurz writable machen
+    $wasReadOnly = $false
+    try {
+        $fi = Get-Item $Path -Force
+        if (($fi.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+            $fi.Attributes = $fi.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+            $wasReadOnly = $true
+        }
+    } catch {}
     try {
         Set-Content -Path $Path -Value $content -NoNewline -Encoding UTF8 -ErrorAction Stop
+        # Wenn die Datei vorher schon ReadOnly war (Apply re-run), Flag wiederherstellen
+        if ($wasReadOnly) {
+            try {
+                $fi2 = Get-Item $Path -Force
+                $fi2.Attributes = $fi2.Attributes -bor [System.IO.FileAttributes]::ReadOnly
+            } catch {}
+        }
         return $true
     } catch {
         Write-SuiteLog "Update-IniValue: Write-Fehler $($_.Exception.Message)" 'ERROR'
@@ -540,7 +559,7 @@ $Global:Tweaks = @(
     },
     [PSCustomObject]@{
         Id='engineini'; Cat='PUBG'; Name='Engine.ini Tweaks (Sharpen + Streaming + Pacing)'; Admin=$false
-        Desc='Spotting-Buff + bessere 1%-Lows. BattlEye-safe'; Impact='KEIN'; ImpactDetail=''
+        Desc='Spotting-Buff + bessere 1%-Lows. BattlEye-safe. Datei wird Read-Only damit PUBG sie beim naechsten Start nicht ueberschreibt.'; Impact='GERING'; ImpactDetail='Engine.ini ist nach Apply read-only - PUBG-interne r.setres-Aenderungen werden geblockt (kein Game-Crash, nur Reset-via-PUBG-Menue funktioniert nicht mehr bis Revert).'
         Changes = @(
             'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\Engine.ini',
             'Backup vor Aenderung als .bak_<timestamp>',
@@ -550,7 +569,8 @@ $Global:Tweaks = @(
             '[SystemSettings] r.FinishCurrentFrame=0    (Frame-Pacing)',
             '[/Script/Engine.RendererSettings] r.Streaming.PoolSize=4096',
             '[/Script/Engine.RendererSettings] r.Streaming.HLODStrategy=2',
-            '[/Script/Engine.RendererSettings] r.Streaming.FramesForFullUpdate=1'
+            '[/Script/Engine.RendererSettings] r.Streaming.FramesForFullUpdate=1',
+            'Nach Apply: Datei-Attribut ReadOnly (PUBG ueberschreibt sonst beim Spielstart)'
         )
         StatusFn = {
             $eng = Get-PUBGEnginePath
@@ -564,8 +584,13 @@ $Global:Tweaks = @(
         SnapshotFn = {
             $eng = Get-PUBGEnginePath
             if (Test-Path $eng) {
+                $wasReadOnly = $false
+                try {
+                    $attr = (Get-Item $eng -Force).Attributes
+                    $wasReadOnly = ($attr -band [System.IO.FileAttributes]::ReadOnly) -ne 0
+                } catch {}
                 $bak = Copy-FileToBackup -SourcePath $eng
-                return @{ BackupPath = $bak; OriginalPath = $eng }
+                return @{ BackupPath = $bak; OriginalPath = $eng; WasReadOnly = $wasReadOnly }
             }
             return $null
         }
@@ -573,6 +598,13 @@ $Global:Tweaks = @(
             try {
                 $eng = Get-PUBGEnginePath
                 if (-not (Test-Path $eng)) { return $false }
+                # Falls Datei aus vorherigem Apply noch read-only ist: erst writable machen
+                try {
+                    $f = Get-Item $eng -Force
+                    if (($f.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+                        $f.Attributes = $f.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+                    }
+                } catch {}
                 $tweaks = @{
                     'SystemSettings' = @{
                         'r.Tonemapper.Sharpen' = '0.7'
@@ -592,12 +624,29 @@ $Global:Tweaks = @(
                         if (-not $ok) { return $false }
                     }
                 }
+                # SCHUTZ gegen PUBG-Overwrite: Datei nach erfolgreichem Write read-only setzen
+                try {
+                    $f2 = Get-Item $eng -Force
+                    $f2.Attributes = $f2.Attributes -bor [System.IO.FileAttributes]::ReadOnly
+                    Write-SuiteLog "Engine.ini: ReadOnly-Attribut gesetzt (PUBG-Overwrite-Schutz)" 'INFO'
+                } catch {
+                    Write-SuiteLog "Engine.ini: ReadOnly konnte nicht gesetzt werden - PUBG ueberschreibt eventuell: $($_.Exception.Message)" 'WARN'
+                }
                 return $true
             } catch { return $false }
         }
         RevertFn = {
             param($snap)
             if ($snap -and $snap.BackupPath -and $snap.OriginalPath) {
+                # ReadOnly entfernen bevor wir die Datei ersetzen
+                try {
+                    if (Test-Path $snap.OriginalPath) {
+                        $f = Get-Item $snap.OriginalPath -Force
+                        if (($f.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+                            $f.Attributes = $f.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+                        }
+                    }
+                } catch {}
                 return (Restore-FileFromBackup -BackupPath $snap.BackupPath -TargetPath $snap.OriginalPath)
             }
             return $false
@@ -745,7 +794,11 @@ $Global:Tweaks = @(
             $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
             $r = (Get-ItemProperty $k -Name 'SystemResponsiveness' -ErrorAction SilentlyContinue).SystemResponsiveness
             $n = (Get-ItemProperty $k -Name 'NetworkThrottlingIndex' -ErrorAction SilentlyContinue).NetworkThrottlingIndex
-            if ($r -le 10 -and ($n -eq -1 -or $n -eq 0xFFFFFFFF -or $n -eq [int32]::MaxValue)) { 'OK' } else { 'WARN' }
+            # Robuster Vergleich: 0xFFFFFFFF kommt als String "4294967295" (UInt32) ODER -1 (Int32, signed) zurueck
+            # je nach PS-Version. String-Cast macht beides gleich vergleichbar.
+            $nStr = "$n"
+            $nOk = ($nStr -eq '-1') -or ($nStr -eq '4294967295')
+            if ($r -le 10 -and $nOk) { 'OK' } else { 'WARN' }
         }
         SnapshotFn = {
             $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
