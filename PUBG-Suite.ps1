@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.5-beta'
+    Version    = '0.9.6-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -300,10 +300,30 @@ function Get-OptimalFpsCap {
 
 function Update-IniValue {
     param([string]$Path, [string]$Section, [string]$Key, [string]$Value)
-    if (-not (Test-Path $Path)) { return $false }
-    $bak = "$Path.bak_$timestamp"
-    if (-not (Test-Path $bak)) { Copy-Item $Path $bak -Force }
-    $content = Get-Content $Path -Raw
+    if (-not (Test-Path $Path)) {
+        Write-SuiteLog "Update-IniValue: Datei nicht gefunden: $Path" 'WARN'
+        return $false
+    }
+    # KRITISCH: Wenn Read fehlschlaegt (Permission/Lock), NICHT schreiben - sonst $null overwrite!
+    try {
+        $content = Get-Content -Path $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-SuiteLog "Update-IniValue: Read-Fehler $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+    if ($null -eq $content) {
+        Write-SuiteLog "Update-IniValue: Datei leer/null: $Path - kein Write" 'WARN'
+        return $false
+    }
+    # Backup mit eindeutigem Sub-Sekunden-Timestamp (verhindert Overwrite bei mehreren Calls/Session)
+    $bakTs = Get-Date -Format 'yyyy-MM-dd_HHmmss_fff'
+    $bak = "$Path.bak_$bakTs"
+    try {
+        Copy-Item $Path $bak -Force -ErrorAction Stop
+    } catch {
+        Write-SuiteLog "Update-IniValue: Backup-Fehler $($_.Exception.Message)" 'WARN'
+        # Wir machen weiter, aber Backup fehlt
+    }
     $secPattern = "(?ms)^\[" + [regex]::Escape($Section) + "\]\s*\r?\n(.*?)(?=^\[|\z)"
     $keyPattern = "(?m)^\s*" + [regex]::Escape($Key) + "\s*=.*$"
     if ($content -match $secPattern) {
@@ -317,8 +337,18 @@ function Update-IniValue {
     } else {
         $content = $content.TrimEnd() + "`r`n`r`n[$Section]`r`n$Key=$Value`r`n"
     }
-    Set-Content -Path $Path -Value $content -NoNewline
-    return $true
+    # Sicherheits-Check: Content muss substantiell sein vor Write
+    if ([string]::IsNullOrWhiteSpace($content) -or $content.Length -lt 5) {
+        Write-SuiteLog "Update-IniValue: Berechnetes Content zu klein/leer - kein Write" 'ERROR'
+        return $false
+    }
+    try {
+        Set-Content -Path $Path -Value $content -NoNewline -Encoding UTF8 -ErrorAction Stop
+        return $true
+    } catch {
+        Write-SuiteLog "Update-IniValue: Write-Fehler $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
 }
 
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
@@ -894,22 +924,39 @@ function Get-MMTPath {
 
 function Install-MMT {
     param([scriptblock]$LogCallback)
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    $target = Split-Path $Global:Suite.Tools.MMT -Parent
     try {
-        if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $target = Split-Path $Global:Suite.Tools.MMT -Parent
+        try {
+            if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+        } catch {
+            $target = Join-Path $env:USERPROFILE 'Tools\MultiMonitorTool'
+            if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
+            & $LogCallback "  C:\Tools nicht beschreibbar - fallback: $target"
+        }
+        $zip = Join-Path $env:TEMP "mmt_$(Get-Random).zip"
+        & $LogCallback "  Lade MultiMonitorTool von NirSoft..."
+        try {
+            Invoke-WebRequest -Uri 'https://www.nirsoft.net/utils/multimonitortool-x64.zip' -OutFile $zip -UseBasicParsing -ErrorAction Stop
+            Expand-Archive -Path $zip -DestinationPath $target -Force -ErrorAction Stop
+        } finally {
+            if (Test-Path $zip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+        }
+        $exe = Join-Path $target 'MultiMonitorTool.exe'
+        if (Test-Path $exe) {
+            & $LogCallback "  Installiert: $exe"
+            Write-SuiteLog "MMT installiert: $exe" 'INFO'
+            return $exe
+        } else {
+            & $LogCallback "  FEHLER: MultiMonitorTool.exe nicht im entpackten Archiv"
+            Write-SuiteLog "MMT-Install: exe nicht im Archiv" 'ERROR'
+            return $null
+        }
     } catch {
-        $target = Join-Path $env:USERPROFILE 'Tools\MultiMonitorTool'
-        if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
+        & $LogCallback "  FEHLER bei MMT-Install: $($_.Exception.Message)"
+        Write-SuiteLog "MMT-Install Fehler: $($_.Exception.Message)" 'ERROR'
+        return $null
     }
-    $zip = Join-Path $env:TEMP 'mmt.zip'
-    & $LogCallback "  Lade MultiMonitorTool von NirSoft..."
-    Invoke-WebRequest -Uri 'https://www.nirsoft.net/utils/multimonitortool-x64.zip' -OutFile $zip -UseBasicParsing
-    Expand-Archive -Path $zip -DestinationPath $target -Force
-    Remove-Item $zip -Force -ErrorAction SilentlyContinue
-    $exe = Join-Path $target 'MultiMonitorTool.exe'
-    & $LogCallback "  Installiert: $exe"
-    return $exe
 }
 
 # ==================== GAME MODE ACTIONS ====================
@@ -966,8 +1013,9 @@ function Start-GameMode {
 
     # 2. RTSS killen
     if ($KillRTSS) {
-        $rtss = Get-Process -Name 'RTSS','RTSSHooksLoader64' -ErrorAction SilentlyContinue
-        if ($rtss) {
+        # @() Wrapper damit .Count auch bei einzelnem Prozess geht
+        $rtss = @(Get-Process -Name 'RTSS','RTSSHooksLoader64' -ErrorAction SilentlyContinue)
+        if ($rtss.Count -gt 0) {
             $rtss | Stop-Process -Force -ErrorAction SilentlyContinue
             & $LogCallback "RTSS killed ($($rtss.Count) Prozess(e))" 'OK'
         } else {
@@ -981,8 +1029,8 @@ function Start-GameMode {
         $apps = @('chrome','msedge','firefox','Spotify','EpicGamesLauncher','Battle.net','obs64')
         $killed = 0
         foreach ($a in $apps) {
-            $p = Get-Process -Name $a -ErrorAction SilentlyContinue
-            if ($p) {
+            $p = @(Get-Process -Name $a -ErrorAction SilentlyContinue)
+            if ($p.Count -gt 0) {
                 $p | Stop-Process -Force -ErrorAction SilentlyContinue
                 & $LogCallback "  -> $a beendet ($($p.Count) Prozess(e))" 'OK'
                 $killed++
@@ -1869,6 +1917,111 @@ $ctrls.btnAutoPattern.Add_Click({
 Update-DetectedHardware
 Update-MonitorList
 
+# ==================== NPI (NVIDIA Profile Inspector) ====================
+$Global:NPIDefaultDir = 'C:\Tools\nvidiaProfileInspector'
+
+function Get-NPIPath {
+    $candidates = @(
+        "$Global:NPIDefaultDir\nvidiaProfileInspector.exe",
+        "$env:USERPROFILE\Tools\nvidiaProfileInspector\nvidiaProfileInspector.exe",
+        "$env:USERPROFILE\Downloads\nvidiaProfileInspector\nvidiaProfileInspector.exe",
+        "$env:USERPROFILE\Downloads\nvidiaProfileInspector.exe"
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return $p }
+    }
+    try {
+        $found = (& where.exe nvidiaProfileInspector.exe 2>$null) | Select-Object -First 1
+        if ($found -and (Test-Path $found)) { return $found }
+    } catch {}
+    return $null
+}
+
+function Install-NPIFromGitHub {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Write-SuiteLog "NPI-Install: hole Release-Info von GitHub..."
+        $apiUrl = 'https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/latest'
+        $headers = @{ 'User-Agent' = 'PUBG-Suite' }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+        $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
+        if (-not $zipAsset) { throw 'Kein ZIP-Asset im NPI-Release gefunden' }
+
+        $target = $Global:NPIDefaultDir
+        try {
+            if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+        } catch {
+            $target = Join-Path $env:USERPROFILE 'Tools\nvidiaProfileInspector'
+            Write-SuiteLog "NPI-Install fallback target: $target" 'WARN'
+            if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
+        }
+        $zipPath = Join-Path $env:TEMP "npi_$($release.tag_name)_$(Get-Random).zip"
+        try {
+            Invoke-WebRequest -Uri $zipAsset.browser_download_url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+            Expand-Archive -Path $zipPath -DestinationPath $target -Force -ErrorAction Stop
+        } finally {
+            if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
+        }
+        $npiExe = Join-Path $target 'nvidiaProfileInspector.exe'
+        if (-not (Test-Path $npiExe)) {
+            $found = Get-ChildItem -Path $target -Recurse -Filter 'nvidiaProfileInspector.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $npiExe = $found.FullName }
+        }
+        if (Test-Path $npiExe) {
+            Write-SuiteLog "NPI installiert: $npiExe ($($release.tag_name))" 'INFO'
+            return $npiExe
+        }
+        Write-SuiteLog "NPI-Install: Executable nicht im Archiv" 'ERROR'
+        return $null
+    } catch {
+        Write-SuiteLog "NPI-Install Fehler: $($_.Exception.Message)" 'ERROR'
+        return $null
+    }
+}
+
+function Invoke-NPIPubgProfile {
+    param([string]$NpiPath)
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) {
+        Write-SuiteLog "Invoke-NPIPubgProfile: NPI-Pfad ungueltig: $NpiPath" 'ERROR'
+        return $false
+    }
+    $profileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
+    $settings = @(
+        @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
+        @{ Id='0x00A879CF'; Val='0x00000000'; Desc='Vertical Sync = Force OFF' }
+        @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
+        @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
+        @{ Id='0x10835000'; Val='0x00000002'; Desc='Low Latency Mode = Ultra' }
+        @{ Id='0x10835013'; Val='0x000000ED'; Desc='Frame Rate Limiter v3 = 237 FPS' }
+        @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
+        @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
+    )
+    $ok = 0; $fail = 0
+    foreach ($s in $settings) {
+        try {
+            $null = & $NpiPath '-setProfileSetting' $profileName $s.Id $s.Val 2>&1
+            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) {
+                $ok++
+                Write-SuiteLog "NPI OK: $($s.Desc)"
+            } else {
+                $fail++
+                Write-SuiteLog "NPI FAIL: $($s.Desc) (Exit $LASTEXITCODE)" 'WARN'
+            }
+        } catch {
+            $fail++
+            Write-SuiteLog "NPI ERR: $($s.Desc) - $($_.Exception.Message)" 'ERROR'
+        }
+    }
+    # Stamp setzen
+    try {
+        $sd = Split-Path $Global:Suite.NPIStamp -Parent
+        if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
+        Get-Date | Out-File $Global:Suite.NPIStamp -Force
+    } catch {}
+    Write-SuiteLog "NPI Apply: $ok ok, $fail fail" 'INFO'
+    return ($ok -gt 0 -and $fail -eq 0)
+}
+
 # ==================== PRESENTMON CAPTURE ====================
 function Get-PresentMonPath {
     foreach ($p in @(
@@ -1900,12 +2053,13 @@ function Install-PresentMonFromGitHub {
     }
 
     Write-SuiteLog "PresentMon Download startet von GitHub..." 'INFO'
+    $outFile = $null
+    $tempFile = $null
     try {
         $apiUrl = 'https://api.github.com/repos/GameTechDev/PresentMon/releases/latest'
         $headers = @{ 'User-Agent' = 'PUBG-Suite' }
         $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
 
-        # Suche x64 .exe Asset zuerst, dann x86, dann irgendwas
         $asset = $release.assets | Where-Object { $_.name -match '^PresentMon-.*-x64\.exe$' } | Select-Object -First 1
         if (-not $asset) {
             $asset = $release.assets | Where-Object { $_.name -match '^PresentMon-.*-x86\.exe$' } | Select-Object -First 1
@@ -1915,18 +2069,37 @@ function Install-PresentMonFromGitHub {
         }
         if (-not $asset) { throw 'Kein PresentMon-Asset im Release gefunden' }
 
+        # Erst nach TEMP laden, validieren, dann ins Target verschieben (verhindert Partial-Download-Verifizierung)
+        $tempFile = Join-Path $env:TEMP "presentmon_$(Get-Random)_$($asset.name)"
         $outFile = Join-Path $target $asset.name
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outFile -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
 
-        # Single-File-Renaming-Strategie: PresentMon-x64.exe (so findet Get-PresentMonPath schneller)
+        # Size-Validierung gegen Asset-Metadata
+        $downloadedSize = (Get-Item $tempFile).Length
+        if ($asset.size -and $downloadedSize -ne $asset.size) {
+            throw "Download unvollstaendig: $downloadedSize Bytes statt $($asset.size) Bytes erwartet"
+        }
+        if ($downloadedSize -lt 100000) {
+            throw "Download zu klein ($downloadedSize Bytes) - vermutlich Fehler-HTML"
+        }
+
+        # Move ins Target
+        Move-Item -Path $tempFile -Destination $outFile -Force -ErrorAction Stop
+        $tempFile = $null  # Nicht mehr cleanup-pflichtig
+
+        # Single-File-Renaming-Strategie
         if ($asset.name -match 'x64') {
             $canonical = Join-Path $target 'PresentMon-x64.exe'
             if ($outFile -ne $canonical) { Copy-Item -Path $outFile -Destination $canonical -Force }
         }
-        Write-SuiteLog "PresentMon installiert: $outFile (Version $($release.tag_name))" 'INFO'
+        Write-SuiteLog "PresentMon installiert: $outFile ($([math]::Round($downloadedSize / 1KB)) KB, $($release.tag_name))" 'INFO'
         return $outFile
     } catch {
         Write-SuiteLog "PresentMon-Install Fehler: $($_.Exception.Message)" 'ERROR'
+        # Cleanup partial download
+        if ($tempFile -and (Test-Path $tempFile)) {
+            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        }
         return $null
     }
 }
@@ -2704,13 +2877,21 @@ function Stop-CaptureTimer {
 
 function Cleanup-CapState {
     Stop-CaptureTimer
-    if ($Global:CaptureState.Process -and -not $Global:CaptureState.Process.HasExited) {
-        try { $Global:CaptureState.Process.Kill() } catch {}
+    # Process-Null-Guard - HasExited Access auf $null wirft Exception
+    if ($Global:CaptureState.Process) {
+        try {
+            if (-not $Global:CaptureState.Process.HasExited) {
+                $Global:CaptureState.Process.Kill()
+            }
+        } catch {
+            Write-SuiteLog "Cleanup-CapState: Process kill fehler $($_.Exception.Message)" 'WARN'
+        }
     }
+    $Global:CaptureState.Process = $null
     $Global:CaptureState.IsRunning = $false
     $Global:CaptureState.Phase = 'idle'
-    $ctrls.btnCapStart.IsEnabled = $true
-    $ctrls.btnCapStop.IsEnabled = $false
+    if ($ctrls.btnCapStart) { $ctrls.btnCapStart.IsEnabled = $true }
+    if ($ctrls.btnCapStop) { $ctrls.btnCapStop.IsEnabled = $false }
 }
 
 function Start-PUBGCapture {
@@ -2771,12 +2952,17 @@ function Start-PUBGCapture {
                     # Switch zu capturing
                     $state.Phase = 'capturing'
                     $state.SecondsRemaining = 60
-                    $args = @('-process_name','TslGame.exe','-timed','60','-terminate_after_timed','-output_file',$script:capOutCsv)
+                    # Rename von $args (PowerShell-Automatic-Variable Shadowing!) zu $pmArgs
+                    $pmArgs = @('-process_name','TslGame.exe','-timed','60','-terminate_after_timed','-output_file',$script:capOutCsv)
                     try {
-                        $state.Process = Start-Process -FilePath $script:capPm -ArgumentList $args -WindowStyle Hidden -PassThru -ErrorAction Stop
+                        $proc = Start-Process -FilePath $script:capPm -ArgumentList $pmArgs -WindowStyle Hidden -PassThru -ErrorAction Stop
+                        if (-not $proc) {
+                            throw 'Start-Process gab keine Prozess-Referenz zurueck (PassThru fehlgeschlagen)'
+                        }
+                        $state.Process = $proc
                         $ctrls.lblCapPhase.Text = "Capturing 60s - in PUBG normal spielen"
                         $ctrls.lblCapPhase.Foreground = '#4ade80'
-                        Write-SuiteLog "PresentMon gestartet PID $($state.Process.Id)"
+                        Write-SuiteLog "PresentMon gestartet PID $($proc.Id)"
                     } catch {
                         $ctrls.lblCapPhase.Text = "Fehler beim PresentMon-Start: $($_.Exception.Message)"
                         $ctrls.lblCapPhase.Foreground = '#f87171'
@@ -2961,6 +3147,16 @@ try {
 # Initial Status
 Update-StatusGrid
 Update-TweaksTab
+
+# Cleanup beim Schliessen - Timer stoppen, ggf. laufenden PresentMon killen
+$window.Add_Closing({
+    try {
+        if ($Global:CaptureState -and $Global:CaptureState.IsRunning) {
+            Write-SuiteLog "Window-Close: stoppe laufende Capture" 'INFO'
+            Cleanup-CapState
+        }
+    } catch {}
+})
 
 # Show
 $window.ShowDialog() | Out-Null

@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.6-beta] - 2026-05-12
+### Fixed — Self-Review Bug-Cycle
+
+**Critical (Data-Loss + Crashes):**
+- `Update-IniValue`: hatte keinen `-ErrorAction Stop` auf Get-Content. Bei Read-Fehler (Permission, File-Lock) wuerde `$null` an Set-Content uebergeben und Engine.ini/GameUserSettings.ini mit leerem Content ueberschreiben. Jetzt: try/catch, Null-Check, Size-Sanity-Check vor Write
+- `Update-IniValue`: Backup-Filename nutzte script-scope `$timestamp` (frozen at load). Same-day re-runs ueberschrieben sich gegenseitig. Jetzt: per-call Sub-Sekunden-Timestamp
+- NPI-Tweak rief `Get-NPIPath`/`Install-NPIFromGitHub`/`Invoke-NPIPubgProfile` auf, die nur in v6-Diagnose definiert waren - in der Suite undefined. NPI-Apply war stillschweigend kaputt seit 0.9.4. Funktionen jetzt direkt in Suite portiert
+- Capture-State `Start-Process -PassThru` koennte $null zurueckgeben (UAC/Permission-Fall). State Machine bleibt dann ewig in 'capturing' haengen weil HasExited-Check auf $null wirft. Jetzt: explizite Null-Pruefung mit Exception-Throw
+
+**Likely Bugs:**
+- `$args` als Variablen-Name in DispatcherTimer-Scriptblock (PowerShell-Automatic-Variable). Umbenannt zu `$pmArgs`
+- `Start-GameMode` RTSS/Background-Kill: `$rtss.Count` und `$p.Count` auf einzelnem Get-Process-Resultat - Process-Objekt hat keine .Count-Property, gibt $null. Jetzt: `@()` Wrapping konsistent
+- `Install-MMT`: kein try/catch um Invoke-WebRequest/Expand-Archive. Bei 404/Corruption gibt Funktion einen Pfad zurueck der nicht existiert; Caller vertraut blind. Jetzt: vollstaendiger try/catch + Pfad-Verify am Ende
+- `Install-PresentMonFromGitHub`: kein Partial-Download-Cleanup, keine Size-Validation. Truncated EXE wuerde Get-PresentMonPath finden und verbinden. Jetzt: Download in TEMP, Size-Vergleich gegen GitHub-API-Asset-Metadata, dann Move zu Target. Bei Fail: TEMP-Cleanup
+
+**Resource Leaks:**
+- DispatcherTimer wurde bei Window-Close nicht gestoppt. PresentMon-Process koennte als Orphan weiterlaufen. Jetzt: `Add_Closing`-Handler ruft Cleanup-CapState
+
 ## [0.9.5-beta] - 2026-05-12
 ### Fixed — Critical Capture-History Corruption
 - captures.json wurde mit jeder neuen Messung tiefer verschachtelt ({value: {value: ...}}) statt flacher Array-Liste
