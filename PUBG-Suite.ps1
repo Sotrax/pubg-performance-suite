@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.4-beta'
+    Version    = '0.9.5-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1322,6 +1322,7 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <Button x:Name="btnCapOpenCsv" Content="Open last CSV" Width="140" Margin="0,0,8,0"/>
                                     <Button x:Name="btnCapOpenFolder" Content="Open Folder" Width="120" Margin="0,0,8,0"/>
                                     <Button x:Name="btnCapCompare" Content="Compare to previous" Width="180" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnCapRebuild" Content="Rebuild from CSVs" Width="160" Margin="0,0,8,0"/>
                                     <Button x:Name="btnCapClearHist" Content="Clear history" Width="140" Style="{StaticResource DangerButton}"/>
                                 </StackPanel>
                             </StackPanel>
@@ -1519,7 +1520,7 @@ foreach ($name in @('lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefr
     'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
     'lblCapLastInfo','capResultGrid','lblCapAvg','lblCap1Low','lblCap01Low','lblCapStdDev',
     'lblCapPresentMode','lblCapGSync','lblCapStutter',
-    'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapClearHist','lblCapHistInfo','capHistoryList',
+    'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapRebuild','btnCapClearHist','lblCapHistInfo','capHistoryList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
     'lblPaths','tbMonitorPattern','lblFooter')) {
@@ -1930,24 +1931,91 @@ function Install-PresentMonFromGitHub {
     }
 }
 
-function Get-CaptureHistory {
-    if (Test-Path $Global:Suite.CapturesFile) {
-        try { return @(Get-Content $Global:Suite.CapturesFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return @() }
+function _Flatten-CaptureEntries {
+    # Erkennt + unwrappt das alte verschachtelte 'value/Count' Format aus broken saves
+    param($Node, $Out)
+    if ($null -eq $Node) { return }
+    if ($Node -is [System.Collections.IEnumerable] -and -not ($Node -is [string])) {
+        foreach ($x in $Node) { _Flatten-CaptureEntries -Node $x -Out $Out }
+        return
     }
-    return @()
+    $props = @($Node.PSObject.Properties.Name)
+    if ($props -contains 'value' -and $props -contains 'Count') {
+        _Flatten-CaptureEntries -Node $Node.value -Out $Out
+        return
+    }
+    if ($props -contains 'AvgFps') {
+        $Out.Add($Node) | Out-Null
+    }
+}
+
+function Get-CaptureHistory {
+    if (-not (Test-Path $Global:Suite.CapturesFile)) { return @() }
+    try {
+        $raw = Get-Content $Global:Suite.CapturesFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Write-SuiteLog "Get-CaptureHistory parse fehler: $($_.Exception.Message)" 'WARN'
+        return @()
+    }
+    $result = New-Object System.Collections.Generic.List[object]
+    _Flatten-CaptureEntries -Node $raw -Out $result
+    return @($result.ToArray())
 }
 
 function Add-CaptureEntry {
     param($Entry)
     try {
-        $list = @(Get-CaptureHistory)
-        $list += $Entry
-        # Cap auf letzte 50
-        if ($list.Count -gt 50) { $list = $list[-50..-1] }
-        $list | ConvertTo-Json -Depth 8 | Set-Content -Path $Global:Suite.CapturesFile -Encoding UTF8
+        $existing = @(Get-CaptureHistory)
+        # Cap auf letzte 49 (+ neuer Entry = 50 max)
+        if ($existing.Count -ge 50) {
+            $existing = @($existing[($existing.Count - 49)..($existing.Count - 1)])
+        }
+        # PS 5.1 Quirk: $list | ConvertTo-Json unwrappt Single-Element-Array zu Object.
+        # Loesung: ConvertTo-Json -InputObject (kein Pipeline) + bei size=1 manuell array-wrappen
+        $combined = @()
+        $combined += $existing
+        $combined += $Entry
+        if ($combined.Count -eq 1) {
+            $itemJson = $combined[0] | ConvertTo-Json -Depth 8
+            $json = "[" + $itemJson + "]"
+        } else {
+            $json = ConvertTo-Json -InputObject $combined -Depth 8
+            # Sicherheits-Check: muss mit '[' beginnen
+            if ($json -notmatch '^\s*\[') { $json = "[$json]" }
+        }
+        Set-Content -Path $Global:Suite.CapturesFile -Value $json -Encoding UTF8 -NoNewline
     } catch {
         Write-SuiteLog "Capture-History Save Fehler: $($_.Exception.Message)" 'ERROR'
     }
+}
+
+function Rebuild-CaptureHistoryFromCsv {
+    # Recovery-Funktion: scannt captures\ Ordner und rebuildet captures.json aus den CSVs
+    Initialize-SuiteStorage
+    $files = @(Get-ChildItem -Path $Global:Suite.CaptureDir -Filter 'capture_*.csv' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+    Write-SuiteLog "Rebuild-CaptureHistory: $($files.Count) CSV-Dateien gefunden" 'INFO'
+    $entries = New-Object System.Collections.Generic.List[object]
+    foreach ($f in $files) {
+        $result = Analyze-CaptureCSV -CsvPath $f.FullName
+        if ($result -and -not $result.Error) {
+            $entries.Add($result) | Out-Null
+        }
+    }
+    if ($entries.Count -eq 0) {
+        Set-Content -Path $Global:Suite.CapturesFile -Value '[]' -Encoding UTF8 -NoNewline
+        Write-SuiteLog "Rebuild: leeres history-File geschrieben" 'INFO'
+        return 0
+    }
+    $arr = $entries.ToArray()
+    if ($arr.Count -eq 1) {
+        $json = "[" + ($arr[0] | ConvertTo-Json -Depth 8) + "]"
+    } else {
+        $json = ConvertTo-Json -InputObject $arr -Depth 8
+        if ($json -notmatch '^\s*\[') { $json = "[$json]" }
+    }
+    Set-Content -Path $Global:Suite.CapturesFile -Value $json -Encoding UTF8 -NoNewline
+    Write-SuiteLog "Rebuild: $($entries.Count) Eintraege geschrieben" 'INFO'
+    return $entries.Count
 }
 
 function Analyze-CaptureCSV {
@@ -2833,6 +2901,14 @@ $prevTime  ->  $curTime
 Tipp: gruene Deltas = Verbesserung, rote = Verschlechterung
 "@
     [System.Windows.MessageBox]::Show($msg, 'Capture-Vergleich', 'OK', 'Information') | Out-Null
+})
+
+$ctrls.btnCapRebuild.Add_Click({
+    $confirm = [System.Windows.MessageBox]::Show("Rebuilds captures.json aus allen CSV-Dateien im Captures-Ordner.`n`nNuetzlich falls die History inkonsistent wurde (z.B. durch alten JSON-Serialisierungs-Bug).", 'Rebuild History', 'YesNo', 'Question')
+    if ($confirm -ne 'Yes') { return }
+    $count = Rebuild-CaptureHistoryFromCsv
+    Update-CapHistory
+    [System.Windows.MessageBox]::Show("Rebuild fertig: $count Eintraege aus CSV-Dateien wiederhergestellt.", 'Rebuild', 'OK', 'Information') | Out-Null
 })
 
 $ctrls.btnCapClearHist.Add_Click({

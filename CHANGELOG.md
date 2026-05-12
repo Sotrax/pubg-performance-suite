@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.5-beta] - 2026-05-12
+### Fixed — Critical Capture-History Corruption
+- captures.json wurde mit jeder neuen Messung tiefer verschachtelt ({value: {value: ...}}) statt flacher Array-Liste
+- Ursache: PS 5.1 ConvertTo-Json unwrappt Pipeline-Arrays mit 1 Element zu Object; nachfolgende Re-Reads wrappten erneut
+- Fix: ConvertTo-Json -InputObject statt Pipeline; bei size=1 manuell '[' und ']' wrappen
+- Fix: Get-CaptureHistory hat jetzt _Flatten-CaptureEntries Helper der alte verschachtelte Daten beim Lesen automatisch unwrappt -> verlorene Eintraege werden recovered
+
+### Added
+- "Rebuild from CSVs" Button im Capture-Tab: scannt captures\ Ordner, analysiert alle CSV-Dateien neu, rebuildet captures.json from scratch -> Recovery-Option falls History korrupt
+
 ## [0.9.4-beta] - 2026-05-12
 ### Added — Tweaks-Tab UX
 - Filter-Buttons: "Alle (X)" / "Offen (X)" / "Angewendet (X)" - aktiver Filter visuell markiert
