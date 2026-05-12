@@ -14,6 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.9.7-beta] - 2026-05-12
+### Added — Capture Tab: Mehr Metriken + Erklaerungen
+- **Bottleneck-Analyse**: CPU-Bound / GPU-Bound / Balanced aus `MsCPUBusy` vs `MsGPUBusy`
+- **CPU Busy / GPU Busy** (ms pro Frame) - zeigt direkt wer das FPS-Budget verbraucht
+- **Render Latency** (`MsRenderPresentLatency`) - Render-Start bis Present, farbcodiert (gruen &lt; 8ms / gelb &lt; 16ms / rot)
+- **Until Displayed** (`MsUntilDisplayed`) - Frame-to-Photon Zeit bis Pixel wirklich am Monitor
+- **Click-to-Photon** (`MsClickToPhotonLatency`) - End-to-End-Latency (nur mit Reflex-Support, meist NA in PUBG)
+- **Stability Score** als Sub-Label unter StdDev: "Stability X% (sehr ruhig/ok/sichtbare Schwankung/unrund)"
+- **Present Mode Sub-Erklaerung**: Direkt unter dem Mode-Namen wird der Mode in Klartext erklaert (z.B. "Hardware: Legacy Flip - niedrige Latency, kein DWM")
+- **Metriken-Expander**: Aufklappbarer Abschnitt mit Klartext-Erklaerung jeder Metrik - was ist STDDEV, was bedeutet 1% Low, warum ist Mode 5 schlecht etc.
+
+### Fixed
+- Mode-Label-Anzeige: PresentMon v2 schreibt String-Namen ("Hardware: Legacy Flip") statt numerischer Codes ("1"/"5"). Wildcard-Matching im Analyse-Code erkennt jetzt alle Mode-Varianten korrekt (Independent Flip, Legacy Flip, Composed Flip, Legacy Copy, Composed Copy, Composition Atlas)
+- StdDev-Karte zeigt jetzt klar dass es um Frame-Pacing geht (Sub-Title "Frame Pacing" + Stability-%-Score) - statt nackter ms-Zahl ohne Kontext
+
 ## [0.9.6-beta] - 2026-05-12
 ### Fixed — Self-Review Bug-Cycle
 

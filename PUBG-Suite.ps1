@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.9.6-beta'
+    Version    = '0.9.7-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1313,6 +1313,8 @@ Add-Type -AssemblyName System.Windows.Forms
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -1321,49 +1323,156 @@ Add-Type -AssemblyName System.Windows.Forms
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
 
+                                    <!-- Row 0: FPS-Hauptmetriken -->
                                     <Border Grid.Row="0" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
                                             <TextBlock Text="AVG FPS" Foreground="#9ca3af" FontSize="10"/>
                                             <TextBlock x:Name="lblCapAvg" Text="-" Foreground="#4ade80" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock Text="Durchschnitt ueber Capture" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
                                     <Border Grid.Row="0" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
                                             <TextBlock Text="1% LOW" Foreground="#9ca3af" FontSize="10"/>
                                             <TextBlock x:Name="lblCap1Low" Text="-" Foreground="#fbbf24" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock Text="schlechteste 1% der Frames" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
                                     <Border Grid.Row="0" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
                                             <TextBlock Text="0.1% LOW" Foreground="#9ca3af" FontSize="10"/>
                                             <TextBlock x:Name="lblCap01Low" Text="-" Foreground="#f87171" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock Text="worst-case Stutter-Floor" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
                                     <Border Grid.Row="0" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="STDDEV" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock Text="STDDEV (Frame Pacing)" Foreground="#9ca3af" FontSize="10"/>
                                             <TextBlock x:Name="lblCapStdDev" Text="-" Foreground="#60a5fa" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock x:Name="lblCapStability" Text="-" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
 
-                                    <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <!-- Row 1: Bottleneck-Analyse -->
+                                    <Border Grid.Row="1" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="PRESENT MODE" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="#e5e7eb" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                            <TextBlock Text="BOTTLENECK" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapBottleneck" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="wer limitiert?" Foreground="#6b7280" FontSize="9"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="CPU BUSY" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapCpuBusy" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="ms CPU pro Frame" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
                                     <Border Grid.Row="1" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="G-SYNC" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapGSync" Text="-" Foreground="#e5e7eb" FontSize="13" FontWeight="SemiBold"/>
+                                            <TextBlock Text="GPU BUSY" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapGpuBusy" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="ms GPU pro Frame" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
                                     <Border Grid.Row="1" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="STUTTER" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapStutter" Text="-" Foreground="#e5e7eb" FontSize="13" FontWeight="SemiBold"/>
+                                            <TextBlock Text="RENDER LATENCY" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapRenderLat" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="Render -> Present" Foreground="#6b7280" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
+
+                                    <!-- Row 2: Latency-Details -->
+                                    <Border Grid.Row="2" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="UNTIL DISPLAYED" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapUntilDisp" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="Frame -> Photon" Foreground="#6b7280" FontSize="9"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="2" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="CLICK->PHOTON" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapClickPhoton" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="nur mit Reflex" Foreground="#6b7280" FontSize="9"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="2" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="G-SYNC" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapGSync" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="AllowsTearing-Flag" Foreground="#6b7280" FontSize="9"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="2" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="STUTTER" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapStutter" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="Frames &gt; 2x Avg" Foreground="#6b7280" FontSize="9"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Row 3: Present Mode mit Erklaerung (volle Breite) -->
+                                    <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4" Background="#0f1115" CornerRadius="4" Padding="12,10" Margin="4">
+                                        <StackPanel>
+                                            <TextBlock Text="PRESENT MODE  (Mode 1/3/4 = OK / Mode 5 = BAD = legacy DWM-Compose ~3-5ms Overhead)" Foreground="#9ca3af" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                            <TextBlock x:Name="lblCapPresentExplain" Text="" Foreground="#6b7280" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Row 4: Metriken-Erklaerung (Expander) -->
+                                    <Expander Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Header="Was bedeuten diese Metriken?" Foreground="#93c5fd" FontSize="11" Margin="4,4,4,0">
+                                        <Border Background="#0f1115" CornerRadius="4" Padding="12,10" Margin="0,6,0,0">
+                                            <StackPanel>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#4ade80">AVG FPS</Run>
+                                                    <Run> - Durchschnittliche Bilder/Sekunde. Hauptkennzahl, aber sagt nichts ueber Konsistenz aus.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#fbbf24">1% LOW</Run>
+                                                    <Run> - FPS-Wert den die schlechtesten 1% der Frames erreichen. Wichtiger als AVG fuer Spielgefuehl. Gap zum AVG &gt; 30% = Stutter-Problem.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#f87171">0.1% LOW</Run>
+                                                    <Run> - Die schlimmsten 0.1% der Frames - der "Floor" bei dem es richtig haengt. Niedriger Wert = sichtbare Hakler / Shadertompilations / Background-CPU-Spikes.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#60a5fa">STDDEV (ms)</Run>
+                                                    <Run> - Standardabweichung der Frametimes in Millisekunden. Misst Frame-Pacing-Konsistenz: niedriger = gleichmaessig fluessig, hoeher = ruckelt selbst bei hoher AVG. Faustregel bei 200+ FPS: &lt; 0.5ms top, 0.5-1.5ms ok, &gt; 2ms unrund.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">BOTTLENECK</Run>
+                                                    <Run> - Wer limitiert die FPS: CPU-Bound (CPU rechnet zu lange pro Frame - mehr GPU-Last unkritisch), GPU-Bound (GPU am Limit - Settings reduzieren bringt FPS), Balanced (beide gleich ausgelastet, idealer Zustand fuer competitive).</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">CPU/GPU BUSY (ms)</Run>
+                                                    <Run> - Wie viele Millisekunden CPU bzw. GPU pro Frame aktiv waren. Bei 200 FPS = 5ms Budget. Wer drueber ist = Bottleneck.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">RENDER LATENCY</Run>
+                                                    <Run> - Zeit vom Render-Start bis der Frame "Present"-ed wird. Niedrig = direkte Pipeline. UNTIL DISPLAYED ergaenzt das: Zeit bis Pixel tatsaechlich auf dem Monitor sichtbar sind (Frame-to-Photon).</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">CLICK -&gt; PHOTON</Run>
+                                                    <Run> - Vollstaendige End-to-End-Latency Maus-Click bis sichtbare Reaktion. Nur verfuegbar bei NVIDIA Reflex (PUBG hat keinen direkten Reflex-Support - daher meist "NA").</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">PRESENT MODE</Run>
+                                                    <Run> - Wie Windows den Frame an den Monitor uebergibt. Hardware Independent Flip (Exclusive FS) und Hardware Legacy Flip = optimal. Composed Copy = DWM-Compositor laeuft mit, ~3-5ms zusaetzliche Latenz - meist verursacht durch laufendes RTSS, falsche DPI-Skalierung oder Multi-Monitor-Setup.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">G-SYNC</Run>
+                                                    <Run> - "AllowsTearing" Flag in &gt; 50% der Frames. Zeigt ob Variable Refresh Rate (G-Sync/FreeSync) aktiv arbeitet.</Run>
+                                                </TextBlock>
+                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11">
+                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">STUTTER</Run>
+                                                    <Run> - Prozent der Frames die mehr als doppelt so lange dauerten wie der Durchschnitt. &lt; 0.2% = unmerklich, &gt; 0.5% = sichtbar als kurze Hakler.</Run>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Border>
+                                    </Expander>
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -1566,8 +1675,10 @@ foreach ($name in @('lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefr
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
-    'lblCapLastInfo','capResultGrid','lblCapAvg','lblCap1Low','lblCap01Low','lblCapStdDev',
-    'lblCapPresentMode','lblCapGSync','lblCapStutter',
+    'lblCapLastInfo','capResultGrid','lblCapAvg','lblCap1Low','lblCap01Low','lblCapStdDev','lblCapStability',
+    'lblCapBottleneck','lblCapCpuBusy','lblCapGpuBusy','lblCapRenderLat',
+    'lblCapUntilDisp','lblCapClickPhoton','lblCapGSync','lblCapStutter',
+    'lblCapPresentMode','lblCapPresentExplain',
     'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapRebuild','btnCapClearHist','lblCapHistInfo','capHistoryList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
@@ -2225,32 +2336,35 @@ function Analyze-CaptureCSV {
         $stutterCount = ($ft | Where-Object { $_ -gt ($avgMs * 2) }).Count
         $stutterPct = [math]::Round(($stutterCount / $n) * 100, 2)
 
-        # PresentMode - die wahrscheinlichste Mode
-        $pmTopName = $null; $pmTopCount = 0
+        # PresentMode - PresentMon v2 schreibt String-Namen wie "Hardware: Legacy Flip" statt Zahl
+        $pmTopName = $null
         if ($data[0].PSObject.Properties.Name -contains 'PresentMode') {
             $modeGroups = $data | Group-Object PresentMode | Sort-Object Count -Descending
             if ($modeGroups -and $modeGroups[0]) {
                 $pmTopName = $modeGroups[0].Name
-                $pmTopCount = $modeGroups[0].Count
             }
         }
-        $pmNames = @{
-            '1' = 'HW Legacy Flip'
-            '2' = 'HW Legacy Copy to FrontBuffer'
-            '3' = 'HW Independent Flip (EXCLUSIVE)'
-            '4' = 'Composed Flip (Borderless Flip)'
-            '5' = 'Composed Copy GPU GDI'
-            '6' = 'Composed Copy CPU GDI'
-            '7' = 'Composition Atlas'
+        # Quality + Friendly-Label per Wildcard-Match auf String
+        $pmRaw = if ($pmTopName) { [string]$pmTopName } else { '' }
+        $modeQuality = switch -Wildcard ($pmRaw) {
+            '*Independent Flip*' { 'OK' }
+            '*Legacy Flip*'      { 'OK' }
+            '*Composed Flip*'    { 'OK' }
+            '*Legacy Copy*'      { 'OK' }
+            '*Composed Copy*'    { 'BAD' }
+            '*Composition Atlas*' { 'WARN' }
+            ''                   { 'SKIP' }
+            default              { 'WARN' }
         }
-        $modeLabel = if ($pmTopName -and $pmNames.ContainsKey($pmTopName)) { "$pmTopName - $($pmNames[$pmTopName])" } elseif ($pmTopName) { "Mode $pmTopName" } else { 'unbekannt' }
-        $modeQuality = switch ($pmTopName) {
-            '1' { 'OK' }
-            '3' { 'OK' }
-            '4' { 'OK' }
-            '5' { 'BAD' }
-            '6' { 'BAD' }
-            default { 'WARN' }
+        $modeLabel = if ($pmRaw) { $pmRaw } else { 'unbekannt' }
+        # Konkrete Erklaerung pro Mode
+        $modeExplain = switch -Wildcard ($pmRaw) {
+            '*Independent Flip*' { 'Exclusive Fullscreen - direkter GPU->Display Pfad, niedrigste Latency' }
+            '*Legacy Flip*'      { 'Hardware Direct Flip - niedrige Latency (kein DWM)' }
+            '*Composed Flip*'    { 'Borderless Flip-Model - modern, gute Latency via DWM' }
+            '*Legacy Copy*'      { 'Hardware Copy - akzeptabel' }
+            '*Composed Copy*'    { 'Legacy DWM-Compose - HOECHSTE Latency (~3-5ms Overhead). RTSS/Multi-Monitor/Falsche Settings?' }
+            default              { '' }
         }
 
         # AllowsTearing -> G-Sync aktiv?
@@ -2258,6 +2372,65 @@ function Analyze-CaptureCSV {
         if ($data[0].PSObject.Properties.Name -contains 'AllowsTearing') {
             $tearingActive = (($data | Where-Object { $_.AllowsTearing -eq '1' }).Count -gt ($n * 0.5))
         }
+
+        # GPU vs CPU Bottleneck Analyse
+        $cpuBusyAvg = $null; $gpuBusyAvg = $null; $bottleneck = 'unbekannt'
+        if ($data[0].PSObject.Properties.Name -contains 'MsCPUBusy') {
+            $cpuVals = @($data | ForEach-Object {
+                if ($_.MsCPUBusy -and $_.MsCPUBusy -ne 'NA') { try { [double]$_.MsCPUBusy } catch { $null } }
+            } | Where-Object { $null -ne $_ })
+            if ($cpuVals.Count -gt 10) {
+                $cpuBusyAvg = [math]::Round(($cpuVals | Measure-Object -Average).Average, 2)
+            }
+        }
+        if ($data[0].PSObject.Properties.Name -contains 'MsGPUBusy') {
+            $gpuVals = @($data | ForEach-Object {
+                if ($_.MsGPUBusy -and $_.MsGPUBusy -ne 'NA') { try { [double]$_.MsGPUBusy } catch { $null } }
+            } | Where-Object { $null -ne $_ })
+            if ($gpuVals.Count -gt 10) {
+                $gpuBusyAvg = [math]::Round(($gpuVals | Measure-Object -Average).Average, 2)
+            }
+        }
+        if ($null -ne $cpuBusyAvg -and $null -ne $gpuBusyAvg) {
+            $diff = $cpuBusyAvg - $gpuBusyAvg
+            $bottleneck = if ($diff -gt 0.5) { 'CPU-Bound' } elseif ($diff -lt -0.5) { 'GPU-Bound' } else { 'Balanced' }
+        }
+
+        # Render-to-Present Latency
+        $renderLatAvg = $null
+        if ($data[0].PSObject.Properties.Name -contains 'MsRenderPresentLatency') {
+            $rlVals = @($data | ForEach-Object {
+                if ($_.MsRenderPresentLatency -and $_.MsRenderPresentLatency -ne 'NA') { try { [double]$_.MsRenderPresentLatency } catch { $null } }
+            } | Where-Object { $null -ne $_ })
+            if ($rlVals.Count -gt 10) {
+                $renderLatAvg = [math]::Round(($rlVals | Measure-Object -Average).Average, 2)
+            }
+        }
+
+        # MsUntilDisplayed - Render-to-Photon
+        $untilDispAvg = $null
+        if ($data[0].PSObject.Properties.Name -contains 'MsUntilDisplayed') {
+            $udVals = @($data | ForEach-Object {
+                if ($_.MsUntilDisplayed -and $_.MsUntilDisplayed -ne 'NA') { try { [double]$_.MsUntilDisplayed } catch { $null } }
+            } | Where-Object { $null -ne $_ })
+            if ($udVals.Count -gt 10) {
+                $untilDispAvg = [math]::Round(($udVals | Measure-Object -Average).Average, 2)
+            }
+        }
+
+        # Click-to-Photon Latency (Reflex-only - meist NA in PUBG)
+        $clickLatAvg = $null
+        if ($data[0].PSObject.Properties.Name -contains 'MsClickToPhotonLatency') {
+            $clVals = @($data | ForEach-Object {
+                if ($_.MsClickToPhotonLatency -and $_.MsClickToPhotonLatency -ne 'NA') { try { [double]$_.MsClickToPhotonLatency } catch { $null } }
+            } | Where-Object { $null -ne $_ })
+            if ($clVals.Count -gt 5) {
+                $clickLatAvg = [math]::Round(($clVals | Measure-Object -Average).Average, 1)
+            }
+        }
+
+        # FPS-Stabilitaet als Score (StdDev als % vom AvgMs)
+        $stabilityScore = if ($avgMs -gt 0) { [math]::Round((1 - ($stddev / $avgMs)) * 100, 1) } else { 0 }
 
         return @{
             CsvPath = $CsvPath
@@ -2270,11 +2443,19 @@ function Analyze-CaptureCSV {
             ZeroOnePctLow = $zeroOnePct
             AvgMs = [math]::Round($avgMs, 2)
             StdDevMs = $stddev
+            StabilityScore = $stabilityScore
             StutterPct = $stutterPct
             PresentMode = $pmTopName
             PresentModeLabel = $modeLabel
             PresentModeQuality = $modeQuality
+            PresentModeExplain = $modeExplain
             GSyncActive = $tearingActive
+            CpuBusyMs = $cpuBusyAvg
+            GpuBusyMs = $gpuBusyAvg
+            Bottleneck = $bottleneck
+            RenderLatencyMs = $renderLatAvg
+            UntilDisplayedMs = $untilDispAvg
+            ClickToPhotonMs = $clickLatAvg
         }
     } catch {
         return @{ Error = $_.Exception.Message }
@@ -2720,7 +2901,19 @@ function Show-CapResult {
     $ctrls.lblCap1Low.Text = $Result.OnePctLow
     $ctrls.lblCap01Low.Text = $Result.ZeroOnePctLow
     $ctrls.lblCapStdDev.Text = "$($Result.StdDevMs) ms"
+    # Stability-Sub-Label (Score-Bewertung)
+    if ($null -ne $Result.StabilityScore) {
+        $score = [double]$Result.StabilityScore
+        $stabTxt = if ($score -ge 95) { "Stability $score% (sehr ruhig)" }
+                   elseif ($score -ge 90) { "Stability $score% (ok)" }
+                   elseif ($score -ge 80) { "Stability $score% (sichtbare Schwankung)" }
+                   else { "Stability $score% (unrund)" }
+        $ctrls.lblCapStability.Text = $stabTxt
+    } else {
+        $ctrls.lblCapStability.Text = ''
+    }
 
+    # Present Mode (Hauptzeile - voller Name) + Erklaerung darunter
     $ctrls.lblCapPresentMode.Text = $Result.PresentModeLabel
     $modeColor = switch ($Result.PresentModeQuality) {
         'OK'   { '#4ade80' }
@@ -2729,6 +2922,55 @@ function Show-CapResult {
         default{ '#e5e7eb' }
     }
     $ctrls.lblCapPresentMode.Foreground = $modeColor
+    $ctrls.lblCapPresentExplain.Text = if ($Result.PresentModeExplain) { $Result.PresentModeExplain } else { '' }
+
+    # Bottleneck mit Farbcode
+    if ($Result.Bottleneck) {
+        $ctrls.lblCapBottleneck.Text = $Result.Bottleneck
+        $ctrls.lblCapBottleneck.Foreground = switch ($Result.Bottleneck) {
+            'Balanced'   { '#4ade80' }
+            'GPU-Bound'  { '#fbbf24' }
+            'CPU-Bound'  { '#fbbf24' }
+            default      { '#9ca3af' }
+        }
+    } else {
+        $ctrls.lblCapBottleneck.Text = '-'
+        $ctrls.lblCapBottleneck.Foreground = '#9ca3af'
+    }
+
+    # CPU/GPU Busy Werte
+    $ctrls.lblCapCpuBusy.Text = if ($null -ne $Result.CpuBusyMs) { "$($Result.CpuBusyMs) ms" } else { 'NA' }
+    $ctrls.lblCapGpuBusy.Text = if ($null -ne $Result.GpuBusyMs) { "$($Result.GpuBusyMs) ms" } else { 'NA' }
+    # Hoeherer Wert in gelb, anderer neutral
+    if ($null -ne $Result.CpuBusyMs -and $null -ne $Result.GpuBusyMs) {
+        if ($Result.CpuBusyMs -gt $Result.GpuBusyMs) {
+            $ctrls.lblCapCpuBusy.Foreground = '#fbbf24'
+            $ctrls.lblCapGpuBusy.Foreground = '#e5e7eb'
+        } elseif ($Result.GpuBusyMs -gt $Result.CpuBusyMs) {
+            $ctrls.lblCapGpuBusy.Foreground = '#fbbf24'
+            $ctrls.lblCapCpuBusy.Foreground = '#e5e7eb'
+        } else {
+            $ctrls.lblCapCpuBusy.Foreground = '#e5e7eb'
+            $ctrls.lblCapGpuBusy.Foreground = '#e5e7eb'
+        }
+    } else {
+        $ctrls.lblCapCpuBusy.Foreground = '#9ca3af'
+        $ctrls.lblCapGpuBusy.Foreground = '#9ca3af'
+    }
+
+    # Render Latency + Until Displayed + Click-to-Photon
+    $ctrls.lblCapRenderLat.Text = if ($null -ne $Result.RenderLatencyMs) { "$($Result.RenderLatencyMs) ms" } else { 'NA' }
+    $ctrls.lblCapRenderLat.Foreground = if ($null -ne $Result.RenderLatencyMs) {
+        if ($Result.RenderLatencyMs -lt 8) { '#4ade80' }
+        elseif ($Result.RenderLatencyMs -lt 16) { '#fbbf24' }
+        else { '#f87171' }
+    } else { '#9ca3af' }
+
+    $ctrls.lblCapUntilDisp.Text = if ($null -ne $Result.UntilDisplayedMs) { "$($Result.UntilDisplayedMs) ms" } else { 'NA' }
+    $ctrls.lblCapUntilDisp.Foreground = if ($null -ne $Result.UntilDisplayedMs) { '#e5e7eb' } else { '#9ca3af' }
+
+    $ctrls.lblCapClickPhoton.Text = if ($null -ne $Result.ClickToPhotonMs) { "$($Result.ClickToPhotonMs) ms" } else { 'NA' }
+    $ctrls.lblCapClickPhoton.Foreground = if ($null -ne $Result.ClickToPhotonMs) { '#e5e7eb' } else { '#6b7280' }
 
     if ($Result.GSyncActive) {
         $ctrls.lblCapGSync.Text = 'AKTIV'
