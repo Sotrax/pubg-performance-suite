@@ -1,0 +1,45 @@
+# User-generated state (never commit)
+*.bak_*
+*.log
+config.json
+history.json
+state.json
+disabled-monitors.txt
+npi-applied.stamp
+
+# Diagnose outputs
+PUBGSystemReport_*.html
+pubg-presentmon.csv
+CapFrameX-*.json
+
+# Downloaded tools (auto-installed by suite)
+nvidiaProfileInspector.exe
+MultiMonitorTool.exe
+PresentMon-*.exe
+
+# IDE / editor
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*~
+
+# Windows artifacts
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# PowerShell test outputs
+TestResults.xml
+coverage.xml
+
+# Build artifacts (future)
+dist/
+build/
+*.zip
+*.msi
+
+# Backup folders
+backups/
+PUBGSuite/
