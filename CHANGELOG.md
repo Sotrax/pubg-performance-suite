@@ -7,12 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Planned
+- Granularer Grafik-Tab: Esport-Profil als Basis + Einzel-Dropdowns pro Setting (Anzeigemodus, AA, Schatten, Texturen ...)
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - Backup-Manager UI (browse + restore historical backups)
 - Auto-update check at startup
 - English UI localization
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
+
+## [0.12.0-beta] - 2026-05-15
+### Added — PUBG Esport-Grafik-Tweak (die fehlende Kernfunktion)
+
+Bisher konfigurierte die Suite Windows, Engine.ini und den NVIDIA-Treiber - aber
+**nie das eigentliche In-Game-Grafikmenue**. Nach "Apply All" blieb PUBG im
+Windowed-Modus mit Ultra-Settings. Diese Luecke schliesst der neue Tweak.
+
+- Neuer PUBG-Tweak `esportgfx` ("PUBG Esport-Grafik (Competitive-Profil)") -
+  schreibt das Competitive-Profil direkt in
+  `%LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini`:
+  - `[ScalabilityGroups]`: ViewDistance/AntiAliasing = Mittel (2), Texturen = Hoch (3),
+    Shadow/PostProcess/Effects/Foliage = Sehr Niedrig (0), ResolutionQuality = 100
+  - `[/Script/TslGame.TslGameUserSettings]`: `FullscreenMode=0` (Exklusiv-Vollbild,
+    inkl. `LastConfirmedFullscreenMode`/`PreferredFullscreenMode`), `ScreenScale=100`,
+    `bUseVSync=False`, `bMotionBlur=False`, `bSharpen=False`, `bSavedGraphicOption=True`
+- "Balanced Visibility"-Profil: niedrige Sicht-Blocker fuer Spotting, AA/Texturen
+  mittel-hoch fuer klare Distanz - basiert auf prosettings.net (67 Pro-Player)
+- BattlEye-safe by design: alle Werte sind im PUBG-Grafikmenue selbst waehlbar
+  (`sg.*` 0-4), keine Out-of-range-Werte, keine versteckten CVars
+- Voll reversibel: Datei-Backup vor Apply, 1-Klick-Revert
+- Aufloesung (`ResolutionSizeX/Y`) wird bewusst NICHT angefasst - hardware-spezifisch
+- ApplyFn blockt, wenn PUBG laeuft (PUBG wuerde die Datei beim Beenden ueberschreiben)
+- `Update-StatusGrid`/Reco-Engine bleiben unveraendert; der Tweak erscheint im
+  Tweaks-Tab und wird von "Apply All" automatisch mit erfasst
+- Versionssprung 0.11.2 -> 0.12.0 (neues Feature)
 
 ## [0.11.2-beta] - 2026-05-12
 ### Fixed — About-Card Hardcoded Version + veralteter Text

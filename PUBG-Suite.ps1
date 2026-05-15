@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.11.2-beta'
+    Version    = '0.12.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -463,6 +463,35 @@ function Update-IniValue {
 
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 
+# Competitive "Balanced Visibility" Grafik-Profil fuer PUBG.
+# Geschrieben in GameUserSettings.ini. Alle Werte sind menue-konform (= im PUBG-
+# Grafikmenue selbst waehlbar) -> BattlEye-safe, kein Out-of-range. Die sg.*-Skala
+# ist 0=Sehr Niedrig, 1=Niedrig, 2=Mittel, 3=Hoch, 4=Ultra.
+# Aufloesung (ResolutionSizeX/Y) wird bewusst NICHT angefasst - die ist hardware-/
+# monitorspezifisch und gehoert nicht in ein generisches Profil.
+$Global:EsportGfxProfile = [ordered]@{
+    'ScalabilityGroups' = [ordered]@{
+        'sg.ResolutionQuality'   = '100.000000'  # volle Render-Skalierung
+        'sg.ViewDistanceQuality' = '2'           # Mittel - sauberes Terrain auf Distanz
+        'sg.AntiAliasingQuality' = '2'           # Mittel - klare Kanten beim Spotting
+        'sg.ShadowQuality'       = '0'           # Sehr Niedrig - Gegner-Schatten bleiben
+        'sg.PostProcessQuality'  = '0'           # Sehr Niedrig - kein Bloom/Haze
+        'sg.TextureQuality'      = '3'           # Hoch - Spotting-Klarheit, kostet kaum FPS
+        'sg.EffectsQuality'      = '0'           # Sehr Niedrig - weniger Screen-Clutter
+        'sg.FoliageQuality'      = '0'           # Sehr Niedrig - liegende Gegner sichtbar
+    }
+    '/Script/TslGame.TslGameUserSettings' = [ordered]@{
+        'ScreenScale'                 = '100.000000'  # kein Upscaling-Blur
+        'bUseVSync'                   = 'False'       # V-Sync aus - kein Input-Lag
+        'bMotionBlur'                 = 'False'       # Bewegungsunschaerfe aus
+        'bSharpen'                    = 'False'       # In-Game-Sharpen aus (Engine.ini-Tweak schaerft bereits)
+        'bSavedGraphicOption'         = 'True'        # PUBG behandelt Werte als user-gewaehlt -> kein Auto-Reset
+        'FullscreenMode'              = '0'           # 0 = Exklusiv-Vollbild (niedrigste Latenz)
+        'LastConfirmedFullscreenMode' = '0'           # konsistent halten, sonst Confirm-Dialog beim Start
+        'PreferredFullscreenMode'     = '0'
+    }
+}
+
 $Global:Tweaks = @(
     [PSCustomObject]@{
         Id='energieplan'; Cat='Windows'; Name='Energieplan: Hoechstleistung'; Admin=$false
@@ -788,6 +817,98 @@ $Global:Tweaks = @(
                 Set-Content $gus -Value $c -NoNewline -ErrorAction Stop
                 return $true
             } catch { return $false }
+        }
+        RevertFn = {
+            param($snap)
+            if ($snap -and $snap.BackupPath -and $snap.OriginalPath) {
+                return (Restore-FileFromBackup -BackupPath $snap.BackupPath -TargetPath $snap.OriginalPath)
+            }
+            return $false
+        }
+    },
+    [PSCustomObject]@{
+        Id='esportgfx'; Cat='PUBG'; Name='PUBG Esport-Grafik (Competitive-Profil)'; Admin=$false
+        Desc='Setzt PUBGs In-Game-Grafik aufs Competitive-Profil: Exklusiv-Vollbild, Sicht-Blocker niedrig, Spotting-Klarheit hoch. Alle Werte menue-konform (BattlEye-safe).'
+        Impact='MITTEL'
+        ImpactDetail='Aendert dein In-Game-Grafikmenue (geringere Detailstufe). PUBG muss beim Apply GESCHLOSSEN sein, sonst ueberschreibt es die Datei beim Beenden. Aufloesung bleibt unveraendert. Voll reversibel via Datei-Backup.'
+        Changes = @(
+            'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini',
+            'Backup vor Aenderung als .bak_<timestamp> (Revert stellt es wieder her)',
+            'WICHTIG: PUBG muss beim Apply geschlossen sein',
+            'Aufloesung wird NICHT veraendert - nur Anzeigemodus + Qualitaet',
+            '[ScalabilityGroups] sg.ViewDistanceQuality=2  (Sichtweite: Mittel)',
+            '[ScalabilityGroups] sg.AntiAliasingQuality=2  (Anti-Aliasing: Mittel - klare Kanten auf Distanz)',
+            '[ScalabilityGroups] sg.ShadowQuality=0        (Schatten: Sehr Niedrig - Gegner-Schatten bleiben sichtbar)',
+            '[ScalabilityGroups] sg.PostProcessQuality=0   (Post-Processing: Sehr Niedrig - kein Bloom/Haze)',
+            '[ScalabilityGroups] sg.TextureQuality=3       (Texturen: Hoch - Spotting-Klarheit, kostet kaum FPS)',
+            '[ScalabilityGroups] sg.EffectsQuality=0       (Effekte: Sehr Niedrig)',
+            '[ScalabilityGroups] sg.FoliageQuality=0       (Laub: Sehr Niedrig - liegende Gegner besser sichtbar)',
+            '[ScalabilityGroups] sg.ResolutionQuality=100  (volle Render-Skalierung)',
+            '[TslGameUserSettings] ScreenScale=100         (kein Upscaling-Blur)',
+            '[TslGameUserSettings] FullscreenMode=0        (Exklusiv-Vollbild - niedrigste Latenz)',
+            '[TslGameUserSettings] bUseVSync=False         (V-Sync aus - kein Input-Lag)',
+            '[TslGameUserSettings] bMotionBlur=False       (Bewegungsunschaerfe aus)',
+            '[TslGameUserSettings] bSharpen=False          (In-Game-Sharpen aus - Engine.ini-Tweak schaerft bereits)',
+            '[TslGameUserSettings] bSavedGraphicOption=True (PUBG behandelt Werte als user-gewaehlt - kein Auto-Reset)'
+        )
+        StatusFn = {
+            $gus = Get-PUBGGameUserPath
+            if (-not (Test-Path $gus)) { return 'SKIP' }
+            $c = Get-Content $gus -Raw -ErrorAction SilentlyContinue
+            if ([string]::IsNullOrWhiteSpace($c)) { return 'SKIP' }
+            # Kern-Keys pruefen (Integer/Bool - Floats wie ScreenScale bewusst ausgelassen,
+            # da PUBG die Nachkommastellen unterschiedlich normalisieren kann).
+            $checks = @(
+                '(?m)^FullscreenMode=0\b'
+                '(?m)^bSavedGraphicOption=True\b'
+                '(?m)^bMotionBlur=False\b'
+                '(?m)^bUseVSync=False\b'
+                '(?m)^sg\.ShadowQuality=0\b'
+                '(?m)^sg\.PostProcessQuality=0\b'
+                '(?m)^sg\.EffectsQuality=0\b'
+                '(?m)^sg\.FoliageQuality=0\b'
+                '(?m)^sg\.AntiAliasingQuality=2\b'
+                '(?m)^sg\.TextureQuality=3\b'
+                '(?m)^sg\.ViewDistanceQuality=2\b'
+            )
+            foreach ($rx in $checks) { if ($c -notmatch $rx) { return 'WARN' } }
+            return 'OK'
+        }
+        SnapshotFn = {
+            $gus = Get-PUBGGameUserPath
+            if (Test-Path $gus) {
+                $bak = Copy-FileToBackup -SourcePath $gus
+                return @{ BackupPath = $bak; OriginalPath = $gus }
+            }
+            return $null
+        }
+        ApplyFn = {
+            try {
+                $gus = Get-PUBGGameUserPath
+                if (-not (Test-Path $gus)) {
+                    Write-SuiteLog "esportgfx: GameUserSettings.ini nicht gefunden - PUBG mind. einmal starten und beenden" 'WARN'
+                    return $false
+                }
+                # PUBG darf nicht laufen - es ueberschreibt GameUserSettings.ini beim Beenden
+                if (@(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue).Count -gt 0) {
+                    Write-SuiteLog "esportgfx: PUBG laeuft - bitte PUBG erst komplett beenden, dann Apply" 'WARN'
+                    return $false
+                }
+                foreach ($section in $Global:EsportGfxProfile.Keys) {
+                    foreach ($key in $Global:EsportGfxProfile[$section].Keys) {
+                        $ok = Update-IniValue -Path $gus -Section $section -Key $key -Value $Global:EsportGfxProfile[$section][$key]
+                        if (-not $ok) {
+                            Write-SuiteLog "esportgfx: Update fehlgeschlagen bei [$section] $key" 'ERROR'
+                            return $false
+                        }
+                    }
+                }
+                Write-SuiteLog "esportgfx: Competitive-Grafik-Profil in GameUserSettings.ini geschrieben" 'INFO'
+                return $true
+            } catch {
+                Write-SuiteLog "esportgfx ApplyFn Exception: $($_.Exception.Message)" 'ERROR'
+                return $false
+            }
         }
         RevertFn = {
             param($snap)
@@ -1899,7 +2020,7 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <Run Text="  Tweaks legen .bak_&lt;timestamp&gt; neben das Original an, Registry-Snapshots in history.json"/>
                                     <LineBreak/>
                                     <Run Text="Reversibel:" FontWeight="SemiBold" Foreground="#93c5fd"/>
-                                    <Run Text="  14 von 15 Tweaks per Klick rueckgaengig (NV-Profil nutzt NPI-eigene Reset-Funktion)"/>
+                                    <Run Text="  15 von 16 Tweaks per Klick rueckgaengig (NV-Profil nutzt NPI-eigene Reset-Funktion)"/>
                                     <LineBreak/>
                                     <Run Text="BattlEye-safe:" FontWeight="SemiBold" Foreground="#93c5fd"/>
                                     <Run Text="  Kein Special K, kein ReShade, kein DXVK, keine ban-bait Engine.ini CVars, kein Process-Lasso auf BEService"/>

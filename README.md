@@ -2,7 +2,7 @@
 
 > Windows-native PowerShell-WPF Tool zum Diagnostizieren und Tunen von PUBG fuer Competitive-Play. BattlEye-safe, vollstaendig reversibel, keine externen Dependencies ausser auto-installierten Open-Source-Helpern.
 
-![Version](https://img.shields.io/badge/version-0.11.1--beta-blue)
+![Version](https://img.shields.io/badge/version-0.12.0--beta-blue)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-blue)
 ![BattlEye](https://img.shields.io/badge/BattlEye-safe-brightgreen)
@@ -33,7 +33,7 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 ### Dashboard - Live Status + Quick Actions + Empfehlungen
 ![Dashboard](docs/screenshots/Dashboard.png)
 
-### Tweaks Tab - 15 Tweaks mit Apply/Revert, Filter, Per-Tweak Details
+### Tweaks Tab - 16 Tweaks mit Apply/Revert, Filter, Per-Tweak Details
 ![Tweaks](docs/screenshots/Tweaks.png)
 
 ### Game Mode - Pre-Game Prep (Monitore, RTSS, Background-Apps)
@@ -50,7 +50,7 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 
 ## Features
 
-### 15 Tweaks - alle einzeln applybar + revertierbar
+### 16 Tweaks - alle einzeln applybar + revertierbar
 
 **Windows (5)**
 - Energieplan: Hoechstleistung
@@ -59,9 +59,10 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 - Maus: Enhanced Pointer Precision AUS
 - Maus: Slider auf 6/11 (1:1 DPI-Mapping)
 
-**PUBG (4)**
+**PUBG (5)**
 - Vollbildoptimierungen (FSO) AUS fuer TslGame.exe - ermoeglicht Hardware Independent Flip statt Composed Copy
 - Engine.ini Tweaks: Sharpening 0.7, Streaming PoolSize 4096, Frame-Pacing CVars, `r.D3D11.UseAllowTearing=1`. Datei wird nach Apply Read-Only damit PUBG sie nicht beim Spielstart ueberschreibt
+- Esport-Grafik (Competitive-Profil): schreibt das In-Game-Grafikmenue in `GameUserSettings.ini` - Exklusiv-Vollbild, Sicht-Blocker (Schatten/Post/Effekte/Laub) niedrig, Spotting-Klarheit (AA/Texturen) mittel-hoch, V-Sync + Motion Blur aus. Aufloesung bleibt unangetastet, alle Werte menue-konform (BattlEye-safe)
 - PUBG FPS-Cap = Monitor-Hz minus 3 (dynamisch berechnet aus Primary-Display)
 - NVIDIA PUBG-Profil via NPI (Low Latency, Power Max, Threaded Optimization etc.) - NPI wird auto-installiert wenn fehlt
 
@@ -223,4 +224,4 @@ MIT - siehe [LICENSE](LICENSE)
 
 ---
 
-**Status**: Beta `0.11.1` - feature-complete fuer Single-User-Workflow, validiert auf Win11 25H2 + RTX 5080 + Ryzen 7950X3D. Braucht Cross-Setup-Testing auf AMD-GPU / Intel-CPU / Win10-Systemen vor 1.0.
+**Status**: Beta `0.12.0` - feature-complete fuer Single-User-Workflow, validiert auf Win11 25H2 + RTX 5080 + Ryzen 7950X3D. Braucht Cross-Setup-Testing auf AMD-GPU / Intel-CPU / Win10-Systemen vor 1.0.
