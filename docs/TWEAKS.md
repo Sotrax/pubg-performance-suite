@@ -36,7 +36,7 @@ Each tweak has a **Revert** function unless noted. Backups for file-based tweaks
 - **Impact**: KEIN
 - **Reversible**: ✓
 
-## PUBG Tweaks (4)
+## PUBG Tweaks (5)
 
 ### 6. Vollbildoptimierungen TslGame.exe: AUS
 - **What**: Disables Windows Fullscreen Optimizations for PUBG executable
@@ -85,22 +85,49 @@ Each tweak has a **Revert** function unless noted. Backups for file-based tweaks
 - **Impact**: KEIN
 - **Reversible**: ⚠ — currently no automated revert; manually via NPI GUI → "Restore profile defaults"
 
+### 10. PUBG Esport-Grafik (Competitive-Profil)
+- **What**: Writes PUBG's in-game graphics menu to the "Balanced Visibility" competitive profile
+- **Where**: `%LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini`
+- **Values applied**:
+  - `[ScalabilityGroups]`
+    - `sg.ResolutionQuality = 100` — full render scale
+    - `sg.ViewDistanceQuality = 2` (Medium) — clean distant terrain
+    - `sg.AntiAliasingQuality = 2` (Medium) — clean edges for long-range spotting
+    - `sg.ShadowQuality = 0` (Very Low) — enemy shadows still render
+    - `sg.PostProcessQuality = 0` (Very Low) — no bloom/haze washing out enemies
+    - `sg.TextureQuality = 3` (High) — spotting clarity, near-zero FPS cost
+    - `sg.EffectsQuality = 0` (Very Low) — less screen clutter
+    - `sg.FoliageQuality = 0` (Very Low) — prone enemies far easier to see
+  - `[/Script/TslGame.TslGameUserSettings]`
+    - `ScreenScale = 100` — no upscaling blur
+    - `FullscreenMode = 0` / `LastConfirmedFullscreenMode = 0` / `PreferredFullscreenMode = 0` — exclusive fullscreen, lowest latency
+    - `bUseVSync = False` — no V-Sync input lag
+    - `bMotionBlur = False` — motion blur off
+    - `bSharpen = False` — in-game sharpen off (the Engine.ini tweak already sharpens)
+    - `bSavedGraphicOption = True` — PUBG treats values as user-chosen, no auto-detect reset
+- **sg.* scale**: 0 = Very Low, 1 = Low, 2 = Medium, 3 = High, 4 = Ultra
+- **Not changed**: resolution (`ResolutionSizeX/Y`) is left untouched — it is hardware/monitor specific
+- **BattlEye**: safe — every value is selectable in PUBG's own graphics menu; no out-of-range values, no hidden console vars
+- **Note**: PUBG must be closed when applying — it rewrites `GameUserSettings.ini` on exit and would overwrite the changes
+- **Impact**: MITTEL — lowers in-game visual fidelity (intentional competitive trade-off)
+- **Reversible**: ✓ (full file backup before write)
+
 ## System Tweaks (5, require Admin)
 
-### 10. Defender Exclusion fuer PUBG-Ordner
+### 11. Defender Exclusion fuer PUBG-Ordner
 - **What**: Adds PUBG install folder to Windows Defender real-time scan exclusions
 - **Where**: `Add-MpPreference -ExclusionPath <PUBG-Pfad>`
 - **Impact**: GERING — Defender stops scanning PUBG folder. Risk only if mods/cheats land there (irrelevant for vanilla Steam install).
 - **Reversible**: ✓ (only removes exclusions that didn't exist pre-Apply)
 
-### 11. Memory Integrity (HVCI): AUS
+### 12. Memory Integrity (HVCI): AUS
 - **What**: Disables Hypervisor-Enforced Code Integrity
 - **Where**: `HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity\Enabled = 0`
 - **Impact**: MITTEL — Kernel-level malicious driver protection disabled. Acceptable for solo gaming desktop without cracked software. NOT recommended on corporate/enterprise machines.
 - **Notes**: Requires reboot to take effect. VBS itself may still run if Hyper-V / WSL2 / Smart App Control are enabled (separate from HVCI).
 - **Reversible**: ✓
 
-### 12. MMCSS Gaming-Profil
+### 13. MMCSS Gaming-Profil
 - **What**: Tunes Multimedia Class Scheduler Service for gaming
 - **Where**: `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile`
   - `SystemResponsiveness = 10` (default: 20) — Multimedia threads get more CPU
@@ -108,7 +135,7 @@ Each tweak has a **Revert** function unless noted. Backups for file-based tweaks
 - **Impact**: KEIN
 - **Reversible**: ✓
 
-### 13. Game-unfriendly Services disablen
+### 14. Game-unfriendly Services disablen
 - **What**: Disables four services that interfere with gaming
 - **Services**:
   - `SysMain` (SuperFetch / Memory Prefetcher) — useless on SSD/NVMe
@@ -118,7 +145,7 @@ Each tweak has a **Revert** function unless noted. Backups for file-based tweaks
 - **Impact**: GERING — Windows Search slower (~few seconds), indexed files still usable
 - **Reversible**: ✓ (restores pre-Apply StartType + restarts if was running)
 
-### 14. NIC Offloads (LSO, RSC) deaktivieren
+### 15. NIC Offloads (LSO, RSC) deaktivieren
 - **What**: Disables Large Send Offload v2 and Receive Segment Coalescing on the primary network adapter
 - **Where**: `Disable-NetAdapterLso -IPv4 -IPv6`, `Disable-NetAdapterRsc -IPv4 -IPv6`
 - **Adapter**: First Up + non-Virtual adapter
