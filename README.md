@@ -42,7 +42,7 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 ### Capture Tab - 60s PresentMon-Capture mit 14 KPIs + Trend-Tabelle
 ![Capture](docs/screenshots/Capture.png)
 
-### Diagnose - Full System Diagnose (v6) mit HTML-Report
+### Diagnose - Full System Diagnose (v7) mit HTML-Report
 ![Diagnose](docs/screenshots/Diagnose.png)
 
 ### Settings - Auto-Detected Hardware + Pfade + Logs/Backups
@@ -109,7 +109,7 @@ Passive ETW-basierte Capture (kein DLL-Hook, kein Overlay) zeigt:
 
 ### Diagnose
 
-Startet die volle v6-Diagnose-Engine im Non-Interactive-Mode, generiert HTML-Report mit 6 Sections (GPU, CPU, NICs, PUBG-Files, Network, Recommendations).
+Startet die v7-Diagnose im Report-Only-Modus, generiert einen HTML-Report mit den Status-Kategorien INVENTAR / OK / TWEAK / ISSUE / MANUELL / SKIP. Geprueft wird gegen die geteilte Konfiguration (`config/PUBGProfile.psd1` + `config/PUBGTweakRegistry.psm1`); Fixes laufen ueber den Tweaks- und Grafik-Tab.
 
 ## Safety
 
@@ -176,11 +176,14 @@ Revert ist unterstuetzt fuer **14 von 15 Tweaks** (NVIDIA-Profile nutzt NPIs eig
 
 ```
 pubg-performance-suite/
-├── PUBG-Suite.ps1            # Haupt-GUI (WPF, ~3700 Zeilen)
+├── PUBG-Suite.ps1            # Haupt-GUI (WPF)
 ├── PUBG-Suite.bat            # Self-elevating Launcher
 ├── launch.ps1                # GitHub Bootstrap (irm | iex Target)
+├── config/                   # Single Source of Truth (Suite + Diagnose)
+│   ├── PUBGProfile.psd1      # Verbindliches PUBG-Grafikprofil
+│   └── PUBGTweakRegistry.psm1 # Registry aller System-/PUBG-Tweaks
 ├── diagnose/
-│   └── PUBG-Diagnose-v6.ps1  # Voller Diagnose-Backend, generiert HTML-Report
+│   └── PUBG-Diagnose-v7.ps1  # Report-Only Diagnose, generiert HTML-Report
 ├── helpers/                  # Optionale standalone Helpers
 │   ├── Nur-OLED.ps1
 │   ├── Alle-Monitore.ps1

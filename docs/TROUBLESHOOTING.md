@@ -69,9 +69,9 @@ Manual revert is always possible via the `.bak_<timestamp>` files in `%LOCALAPPD
 
 ## "Run Full Diagnose" button does nothing
 
-The Diagnose button looks for `PUBG-Diagnose-v6.ps1` on the Desktop. After install via `launch.ps1`, the file is in `%LOCALAPPDATA%\PUBGSuite\app\diagnose\PUBG-Diagnose-v6.ps1`.
+The suite resolves the diagnose script automatically via `$PSScriptRoot` (`$Global:Suite.DiagScript` → `diagnose\PUBG-Diagnose-v7.ps1`). It works both from a repo clone and from the bootstrap install at `%LOCALAPPDATA%\PUBGSuite\app\diagnose\PUBG-Diagnose-v7.ps1`.
 
-**Future fix**: the suite will resolve this path automatically. For now: copy `diagnose\PUBG-Diagnose-v6.ps1` to your Desktop, or edit `$Global:Suite.DiagScript` in PUBG-Suite.ps1 to point at the right location.
+If the button does nothing, check that `diagnose\PUBG-Diagnose-v7.ps1` and the `config\` folder (`PUBGProfile.psd1`, `PUBGTweakRegistry.psm1`) are present next to `PUBG-Suite.ps1` — the diagnose needs the shared config to run.
 
 ## Reporting bugs
 

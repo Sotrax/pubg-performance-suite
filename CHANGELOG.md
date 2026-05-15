@@ -15,6 +15,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.14.0-beta] - 2026-05-15
+### Changed — Single Source of Truth: geteiltes Profil + Tweak-Registry
+
+Die Suite und das Diagnose-Skript widersprachen sich: die Suite setzte
+PUBG-Grafikwerte, die Diagnose meldete genau diese Werte als Problem, weil sie
+gegen hartgecodete *andere* Soll-Werte prüfte. Dieser Refactor zieht beide
+Komponenten auf **eine** gemeinsame Konfiguration zusammen.
+
+**Neue Dateien**
+
+- `config/PUBGProfile.psd1` — verbindliches PUBG-Grafikprofil (sg.*-Werte,
+  Anzeigemodus, V-Sync, Motion Blur ...). Beide Komponenten laden es per
+  `Import-PowerShellDataFile` (parst nur Daten, führt keinen Code aus).
+- `config/PUBGTweakRegistry.psm1` — zentrale Registry aller 15 System-/PUBG-
+  Tweaks mit je `Check`/`Apply`/`Revert`. Selbstständiges Modul mit eigenen
+  privaten Helfern (Registry-Snapshot, INI-Writer, Datei-Backup, NPI).
+
+**`PUBG-Suite.ps1` (0.13.0-beta → 0.14.0-beta)**
+
+- Grafik-Tab lädt die Soll-Werte aus `PUBGProfile.psd1` statt aus einem
+  hartgecodeten `$Global:EsportGfxProfile`.
+- Beim Apply des Grafik-Profils werden jetzt `FullscreenMode` **+**
+  `LastConfirmedFullscreenMode` **+** `PreferredFullscreenMode` geschrieben und
+  `LastUserConfirmedResolutionSizeX/Y` mit der aktuellen Auflösung
+  synchronisiert — so akzeptiert PUBG die Werte beim Start als „zuletzt
+  bestätigt" und setzt das Profil nicht zurück. Kein Read-only-Flag auf
+  GameUserSettings.ini (In-Game-Änderungen bleiben möglich).
+- Tweaks-Tab rendert aus `PUBGTweakRegistry.psm1` statt aus einem inline
+  `$Global:Tweaks`-Array. Bestehende Tweak-Logik wurde 1:1 ins Modul migriert,
+  Duplikate konsolidiert. `Invoke-TweakApply`/`Invoke-TweakRevert` arbeiten mit
+  dem neuen `Check`/`Apply`/`Revert`-Modell; History-/Snapshot-Revert bleibt.
+- **Tweak-IDs unverändert** (`mmcss`, `fso`, `energieplan` ...) — bestehende
+  `history.json` und damit der 1-Klick-Revert bereits angewendeter Tweaks
+  bleiben gültig. Keine Migration nötig.
+- Game-Mode-Tab unverändert (Monitor-Abschaltung via MultiMonitorTool
+  funktioniert — siehe Diagnose-Fix unten).
+
+**`diagnose/PUBG-Diagnose-v6.ps1` → `diagnose/PUBG-Diagnose-v7.ps1`**
+
+- Neue, mechanisch definierte Status-Kategorien:
+  `INVENTAR` (reine Identifikation) · `OK` · `TWEAK` (via Suite verbesserbar) ·
+  `ISSUE` (via Suite zu beheben, wichtig) · `MANUELL` (selbst zu beheben:
+  BIOS/Treiber/Windows) · `SKIP`. Kein `INFO` mehr.
+- Grafik-Checks vergleichen gegen `PUBGProfile.psd1` — der alte Konflikt
+  (Diagnose erwartete AA=0/ViewDist=3/Effects=2, Suite setzte 2/2/0) ist damit
+  aufgelöst. Kritische Keys (V-Sync, Dynamic Resolution, Motion Blur,
+  FullscreenMode) → `ISSUE` bei Abweichung, restliche → `TWEAK`.
+- System-Tweak-Checks laufen über eine Schleife über die Tweak-Registry: jeder
+  `TWEAK`-Befund hat damit garantiert einen Apply-Button in der Suite.
+- **Bugfix MMCSS**: Check kommt jetzt aus der Registry mit robustem
+  String-Vergleich — `SystemResponsiveness=10` + `NetworkThrottlingIndex` als
+  `4294967295`/`-1` werden korrekt als `OK` erkannt (vorher fälschlich WARN).
+- **Multi-Monitor**: Zählung via `[Windows.Forms.Screen]::AllScreens` statt
+  `WmiMonitorID` — abgeklemmte/per Suite-Game-Mode deaktivierte Monitore zählen
+  nicht mehr mit, der Count fällt nach dem Game-Mode korrekt auf 1.
+- **Entfernt**: Display-Skalierung (zu invasiver Fix für 4K-Desktops) und
+  System Timer Resolution (auf Win11 22H2+ obsolet — Timer-Resolution ist seit
+  Win10 2004 per-process, globale Hints wirken nicht mehr systemweit).
+- **Entfernt**: interaktive Fix-Phase + Admin-Script-Generierung. Das Skript ist
+  jetzt **report-only** — alle Fixes laufen über die Suite. Damit gibt es keine
+  doppelt gepflegte Fix-Logik mehr.
+- HTML-Report: neue Summary-Cards (Inventar-Card bewusst dezenter), INVENTAR-
+  Zeilen ausgegraut, Footer mit Profil-Version + SHA256-Hash.
+
+**Recherche-Hinweise (geprüft, nicht ungeprüft übernommen)**
+
+- MMCSS-Werte sind 2026 auf Win11 25H2 weiterhin gültig (Effekt modest, aber
+  harmlos) — als `TWEAK` behalten.
+- Globale Timer-Resolution ist auf Win11 22H2+ bestätigt obsolet → Check
+  entfernt.
+- `LastConfirmed*`/`LastUserConfirmed*`-Keys existieren in PUBG und werden beim
+  Start geprüft → Apply schreibt sie konsequent mit.
+- Die Profil-Werte sind mit dem Pro-Konsens 2025/2026 konsistent (minimale,
+  vertretbare Abweichungen bei Texturen=Hoch und Sichtweite=Mittel).
+
+**MTU**: Der MTU-Check ist von WARN+Fix auf reines `INVENTAR` (nur Wertanzeige)
+zurückgestuft — 1492 zu erzwingen schadet auf modernen Kabel-/Glasfaser-
+Anschlüssen leicht, ein MTU-Tweak wurde bewusst nicht angelegt.
+
+### Migrationshinweise
+- Keine Aktion nötig. Die alte `history.json` bleibt kompatibel (Tweak-IDs
+  unverändert). Backups, Logs und State in `%LOCALAPPDATA%\PUBGSuite\` bleiben
+  unangetastet.
+- Beim Update via `irm | iex` wird der `config/`-Ordner automatisch mit
+  ausgeliefert. Bei manuellem Update sicherstellen, dass `config/` neben
+  `PUBG-Suite.ps1` liegt.
+
 ## [0.13.0-beta] - 2026-05-15
 ### Changed — Eigener "Grafik"-Tab fuer das Esport-Grafik-Profil
 
@@ -383,7 +470,8 @@ Auf User-Wunsch ("Legacy Flip ist optimal - das soll auch gruen sein"):
 - Backup files in `%LOCALAPPDATA%\PUBGSuite\backups\`
 
 ## [0.x] Pre-Suite Iterations (Diagnose-Script v2-v6)
-See `diagnose/PUBG-Diagnose-v6.ps1` for the original diagnostic backend.
+The diagnostic backend now lives in `diagnose/PUBG-Diagnose-v7.ps1` (report-only,
+shared config). Earlier standalone iterations:
 
 - v6: Engine.ini auto-tweaks, MMCSS, NIC offloads, Multi-Monitor/RTSS/HDR checks
 - v5: Correct NPI hex IDs + verification

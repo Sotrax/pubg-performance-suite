@@ -6,7 +6,7 @@
 .DESCRIPTION
     Phase 1 PoC. Drei funktionale Tabs:
     - Dashboard: Live-Status aller relevanten Settings
-    - Diagnose: ruft PUBG-Diagnose-v6.ps1 auf, oeffnet HTML
+    - Diagnose: ruft PUBG-Diagnose-v7.ps1 auf, oeffnet HTML
     - Game Mode: One-Click pre-/post-game prep
 
     Tools werden bei Bedarf auto-installiert:
@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.13.0-beta'
+    Version    = '0.14.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -34,10 +34,14 @@ $Global:Suite = @{
     CapturesFile = "$env:LOCALAPPDATA\PUBGSuite\captures.json"
     MonitorIDs = "$env:LOCALAPPDATA\PUBGSuite\disabled-monitors.txt"
     NPIStamp   = "$env:LOCALAPPDATA\PUBGDiag\npi-applied.stamp"
-    # Diag-Script liegt fest neben der Suite (Repo: diagnose\PUBG-Diagnose-v6.ps1,
-    # Bootstrap-Install: %LOCALAPPDATA%\PUBGSuite\app\diagnose\PUBG-Diagnose-v6.ps1).
+    # Diag-Script liegt fest neben der Suite (Repo: diagnose\PUBG-Diagnose-v7.ps1,
+    # Bootstrap-Install: %LOCALAPPDATA%\PUBGSuite\app\diagnose\PUBG-Diagnose-v7.ps1).
     # $PSScriptRoot zeigt in beiden Faellen auf den richtigen Folder.
-    DiagScript = (Join-Path $PSScriptRoot 'diagnose\PUBG-Diagnose-v6.ps1')
+    DiagScript = (Join-Path $PSScriptRoot 'diagnose\PUBG-Diagnose-v7.ps1')
+    # Geteilte Konfiguration: Grafikprofil + Tweak-Registry. Suite UND Diagnose
+    # lesen ausschliesslich aus diesen beiden Dateien (Single Source of Truth).
+    ProfilePath  = (Join-Path $PSScriptRoot 'config\PUBGProfile.psd1')
+    RegistryPath = (Join-Path $PSScriptRoot 'config\PUBGTweakRegistry.psm1')
     Tools = @{
         MMT  = 'C:\Tools\MultiMonitorTool\MultiMonitorTool.exe'
         NPI  = 'C:\Tools\nvidiaProfileInspector\nvidiaProfileInspector.exe'
@@ -366,11 +370,10 @@ function Get-LiveStatus {
     return $s
 }
 
-# ==================== TWEAK-REGISTRY ====================
-# Zentrale Definition aller Tweaks. Jeder Tweak hat:
-#  StatusFn: liefert 'OK' / 'WARN' / 'BAD' / 'SKIP' und optional Value-Text
-#  ApplyFn:  Apply-Logik (return $true bei Erfolg)
-#  RevertFn: optional - Rollback
+# ==================== PUBG-PFAD- & INI-HELFER ====================
+# Die System-Tweaks selbst kommen aus config\PUBGTweakRegistry.psm1 (siehe
+# unten "GETEILTE KONFIGURATION"). Hier nur noch geteilte Helfer, die auch
+# das esportgfx-Grafikprofil und die Live-Status-Anzeige nutzen.
 
 function Get-PUBGEnginePath { "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\Engine.ini" }
 function Get-PUBGGameUserPath { "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini" }
@@ -463,812 +466,209 @@ function Update-IniValue {
 
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 
-# Competitive "Balanced Visibility" Grafik-Profil fuer PUBG.
-# Geschrieben in GameUserSettings.ini. Alle Werte sind menue-konform (= im PUBG-
-# Grafikmenue selbst waehlbar) -> BattlEye-safe, kein Out-of-range. Die sg.*-Skala
-# ist 0=Sehr Niedrig, 1=Niedrig, 2=Mittel, 3=Hoch, 4=Ultra.
-# Aufloesung (ResolutionSizeX/Y) wird bewusst NICHT angefasst - die ist hardware-/
-# monitorspezifisch und gehoert nicht in ein generisches Profil.
-$Global:EsportGfxProfile = [ordered]@{
-    'ScalabilityGroups' = [ordered]@{
-        'sg.ResolutionQuality'   = '100.000000'  # volle Render-Skalierung
-        'sg.ViewDistanceQuality' = '2'           # Mittel - sauberes Terrain auf Distanz
-        'sg.AntiAliasingQuality' = '2'           # Mittel - klare Kanten beim Spotting
-        'sg.ShadowQuality'       = '0'           # Sehr Niedrig - Gegner-Schatten bleiben
-        'sg.PostProcessQuality'  = '0'           # Sehr Niedrig - kein Bloom/Haze
-        'sg.TextureQuality'      = '3'           # Hoch - Spotting-Klarheit, kostet kaum FPS
-        'sg.EffectsQuality'      = '0'           # Sehr Niedrig - weniger Screen-Clutter
-        'sg.FoliageQuality'      = '0'           # Sehr Niedrig - liegende Gegner sichtbar
+# ==================== GETEILTE KONFIGURATION (PROFIL + TWEAK-REGISTRY) ========
+# Single Source of Truth: das PUBG-Grafikprofil und die Tweak-Registry liegen
+# in config\ und werden von Suite UND Diagnose-Skript gemeinsam genutzt. Kein
+# Hardcoding der Werte mehr in der Suite.
+
+# --- PUBG-Grafikprofil aus config\PUBGProfile.psd1 laden ----------------------
+# $Global:EsportGfxProfile bekommt exakt die alte Struktur (Sektion -> Keys),
+# damit der Grafik-Tab und die Apply-Logik unveraendert damit arbeiten koennen.
+$Global:EsportGfxProfileMeta = @{ Version = '?'; Path = $Global:Suite.ProfilePath }
+$Global:EsportGfxProfile = $null
+try {
+    if (-not (Test-Path $Global:Suite.ProfilePath)) {
+        throw "Profil-Datei nicht gefunden: $($Global:Suite.ProfilePath)"
     }
-    '/Script/TslGame.TslGameUserSettings' = [ordered]@{
-        'ScreenScale'                 = '100.000000'  # kein Upscaling-Blur
-        'bUseVSync'                   = 'False'       # V-Sync aus - kein Input-Lag
-        'bMotionBlur'                 = 'False'       # Bewegungsunschaerfe aus
-        'bSharpen'                    = 'False'       # In-Game-Sharpen aus (Engine.ini-Tweak schaerft bereits)
-        'bSavedGraphicOption'         = 'True'        # PUBG behandelt Werte als user-gewaehlt -> kein Auto-Reset
-        'FullscreenMode'              = '0'           # 0 = Exklusiv-Vollbild (niedrigste Latenz)
-        'LastConfirmedFullscreenMode' = '0'           # konsistent halten, sonst Confirm-Dialog beim Start
-        'PreferredFullscreenMode'     = '0'
+    $profileData = Import-PowerShellDataFile -Path $Global:Suite.ProfilePath -ErrorAction Stop
+    $Global:EsportGfxProfile = $profileData.Sections
+    $Global:EsportGfxProfileMeta.Version = "$($profileData.ProfileVersion)"
+    Write-SuiteLog "Grafikprofil geladen: v$($profileData.ProfileVersion) ($($Global:Suite.ProfilePath))" 'INFO'
+} catch {
+    Write-SuiteLog "FEHLER beim Laden des Grafikprofils: $($_.Exception.Message)" 'ERROR'
+}
+
+# --- Tweak-Registry-Modul importieren -----------------------------------------
+try {
+    if (-not (Test-Path $Global:Suite.RegistryPath)) {
+        throw "Registry-Modul nicht gefunden: $($Global:Suite.RegistryPath)"
+    }
+    Import-Module $Global:Suite.RegistryPath -Force -ErrorAction Stop
+    Write-SuiteLog "Tweak-Registry geladen: $($Global:Suite.RegistryPath)" 'INFO'
+} catch {
+    Write-SuiteLog "FEHLER beim Laden der Tweak-Registry: $($_.Exception.Message)" 'ERROR'
+}
+
+# --- $Global:Tweaks aus der Registry aufbauen (Adapter) -----------------------
+# Die Registry liefert Id/Category/Label/Description/Impact/RequiresAdmin/
+# Changes + die Scriptbloecke Check/Apply/Revert. Die Suite-UI erwartet
+# historisch die Feldnamen Cat/Name/Desc/Admin und einen StatusFn, der einen
+# Alt-Status (OK/WARN/BAD/SKIP) liefert. ConvertTo-SuiteTweak baut diese
+# Bruecke; StatusFn ist eine Closure (GetNewClosure) pro Tweak, damit jeder
+# Eintrag seinen eigenen Check referenziert.
+function ConvertTo-SuiteTweak {
+    param($RegTweak)
+    $regCheck = $RegTweak.Check
+    $statusFn = {
+        try { $r = & $regCheck } catch { return 'SKIP' }
+        switch ("$($r.Status)") { 'TWEAK' { 'WARN' } 'ISSUE' { 'BAD' } 'OK' { 'OK' } 'SKIP' { 'SKIP' } default { 'SKIP' } }
+    }.GetNewClosure()
+    [PSCustomObject]@{
+        Id           = $RegTweak.Id
+        Cat          = $RegTweak.Category
+        Name         = $RegTweak.Label
+        Desc         = $RegTweak.Description
+        Admin        = [bool]$RegTweak.RequiresAdmin
+        Impact       = $RegTweak.Impact
+        ImpactDetail = $RegTweak.ImpactDetail
+        Changes      = $RegTweak.Changes
+        Check        = $RegTweak.Check
+        Apply        = $RegTweak.Apply
+        Revert       = $RegTweak.Revert
+        StatusFn     = $statusFn
     }
 }
 
-$Global:Tweaks = @(
-    [PSCustomObject]@{
-        Id='energieplan'; Cat='Windows'; Name='Energieplan: Hoechstleistung'; Admin=$false
-        Desc='CPU haelt volle Frequenz'; Impact='GERING'; ImpactDetail='~5W mehr Idle-Verbrauch'
-        Changes = @(
-            'powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c',
-            'Aktiver Energieplan -> Windows-Standard-Hoechstleistung'
-        )
-        StatusFn = {
-            $a = powercfg /getactivescheme 2>$null
-            if ($a -match '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c|e9a42b02-d5df-448d-aa00-03f14749eb61') { 'OK' } else { 'WARN' }
-        }
-        SnapshotFn = {
-            $a = powercfg /getactivescheme 2>$null
-            if ($a -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
-                return @{ PreGuid = $matches[1] }
+$Global:Tweaks = @()
+if (Get-Command Get-PUBGTweakRegistry -ErrorAction SilentlyContinue) {
+    $Global:Tweaks = @(Get-PUBGTweakRegistry | ForEach-Object { ConvertTo-SuiteTweak -RegTweak $_ })
+    Write-SuiteLog "Tweaks aus Registry uebernommen: $($Global:Tweaks.Count)" 'INFO'
+} else {
+    Write-SuiteLog 'Get-PUBGTweakRegistry nicht verfuegbar - Tweaks-Tab bleibt leer' 'ERROR'
+}
+
+# ==================== ESPORT-GRAFIK-PROFIL (eigener Grafik-Tab) ===============
+# esportgfx ist KEIN Registry-Tweak: es bekommt einen eigenen Tab mit separatem
+# Apply/Revert und wird nie von "Apply All" erfasst. Es schreibt das aus
+# PUBGProfile.psd1 geladene Profil in PUBGs GameUserSettings.ini.
+
+# Prueft GameUserSettings.ini gegen das geladene Profil.
+# Rueckgabe: @{ Status='OK'|'TWEAK'|'SKIP'; CurrentValue; Detail }
+function Test-EsportGfxProfile {
+    $gus = Get-PUBGGameUserPath
+    if (-not (Test-Path $gus)) {
+        return @{ Status='SKIP'; CurrentValue='GameUserSettings.ini nicht gefunden'
+                  Detail='PUBG mind. einmal starten und beenden' }
+    }
+    if (-not $Global:EsportGfxProfile) {
+        return @{ Status='SKIP'; CurrentValue='Profil nicht geladen'
+                  Detail='PUBGProfile.psd1 fehlt oder ist fehlerhaft' }
+    }
+    $c = Get-Content $gus -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($c)) {
+        return @{ Status='SKIP'; CurrentValue='GameUserSettings.ini leer'; Detail='' }
+    }
+    $mismatch = @()
+    foreach ($section in $Global:EsportGfxProfile.Keys) {
+        foreach ($key in $Global:EsportGfxProfile[$section].Keys) {
+            $want = [string]$Global:EsportGfxProfile[$section][$key]
+            $rx   = '(?m)^\s*' + [regex]::Escape($key) + '\s*=\s*(.+?)\s*$'
+            if ($c -match $rx) { $have = $matches[1] } else { $have = $null }
+            if ($null -eq $have) { $mismatch += $key; continue }
+            # Float-tolerant: '100.000000' == '100', PowerShell-[double]-Cast ist
+            # kultur-invariant (Dezimalpunkt). Bools wie 'False' werfen -> String-Vergleich.
+            $wantNum = $null; $haveNum = $null
+            try { $wantNum = [double]$want } catch {}
+            try { $haveNum = [double]$have } catch {}
+            if ($null -ne $wantNum -and $null -ne $haveNum) {
+                if ([math]::Floor($wantNum) -ne [math]::Floor($haveNum)) { $mismatch += $key }
+            } elseif ($want -ne $have) {
+                $mismatch += $key
             }
-            return $null
-        }
-        ApplyFn = {
-            try {
-                powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { return $true } else { return $false }
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            if ($snap -and $snap.PreGuid) {
-                powercfg /setactive $snap.PreGuid 2>&1 | Out-Null
-                return ($LASTEXITCODE -eq 0)
-            }
-            return $false
-        }
-    },
-    [PSCustomObject]@{
-        Id='gamemode'; Cat='Windows'; Name='Game Mode: AN'; Admin=$false
-        Desc='Priorisiert Game-Prozess'; Impact='KEIN'; ImpactDetail=''
-        Changes = @('HKCU\Software\Microsoft\GameBar', 'AutoGameModeEnabled = 1 (DWord)')
-        StatusFn = {
-            $v = (Get-ItemProperty 'HKCU:\Software\Microsoft\GameBar' -Name 'AutoGameModeEnabled' -ErrorAction SilentlyContinue).AutoGameModeEnabled
-            if ($v -eq 1) { 'OK' } else { 'WARN' }
-        }
-        SnapshotFn = { Get-RegistrySnapshot -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'AutoGameModeEnabled' }
-        ApplyFn = {
-            try {
-                if (-not (Test-Path 'HKCU:\Software\Microsoft\GameBar')) { New-Item 'HKCU:\Software\Microsoft\GameBar' -Force -ErrorAction Stop | Out-Null }
-                Set-ItemProperty 'HKCU:\Software\Microsoft\GameBar' -Name 'AutoGameModeEnabled' -Value 1 -Type DWord -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = { param($snap) Restore-RegistrySnapshot $snap }
-    },
-    [PSCustomObject]@{
-        Id='gamedvr'; Cat='Windows'; Name='Xbox Game DVR: AUS'; Admin=$false
-        Desc='kostet messbar FPS'; Impact='KEIN'; ImpactDetail=''
-        Changes = @('HKCU\System\GameConfigStore', 'GameDVR_Enabled = 0 (DWord)')
-        StatusFn = {
-            $v = (Get-ItemProperty 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -ErrorAction SilentlyContinue).GameDVR_Enabled
-            if ($v -eq 0) { 'OK' } else { 'BAD' }
-        }
-        SnapshotFn = { Get-RegistrySnapshot -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' }
-        ApplyFn = {
-            try {
-                Set-ItemProperty 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -Value 0 -Type DWord -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = { param($snap) Restore-RegistrySnapshot $snap }
-    },
-    [PSCustomObject]@{
-        Id='mouseaccel'; Cat='Windows'; Name='Maus: Enhanced Pointer Precision AUS'; Admin=$false
-        Desc='1:1 Mapping ohne Software-Beschleunigung'; Impact='KEIN'; ImpactDetail=''
-        Changes = @('HKCU\Control Panel\Mouse', 'MouseSpeed = 0', 'MouseThreshold1 = 0', 'MouseThreshold2 = 0')
-        StatusFn = {
-            $v = (Get-ItemProperty 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed' -ErrorAction SilentlyContinue).MouseSpeed
-            if ($v -eq '0') { 'OK' } else { 'BAD' }
-        }
-        SnapshotFn = {
-            @{
-                Speed = (Get-RegistrySnapshot -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed')
-                T1 = (Get-RegistrySnapshot -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold1')
-                T2 = (Get-RegistrySnapshot -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold2')
-            }
-        }
-        ApplyFn = {
-            try {
-                Set-ItemProperty 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed' -Value '0' -Type String -ErrorAction Stop
-                Set-ItemProperty 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0' -Type String -ErrorAction Stop
-                Set-ItemProperty 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0' -Type String -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            $ok = $true
-            if ($snap.Speed) { $ok = (Restore-RegistrySnapshot $snap.Speed) -and $ok }
-            if ($snap.T1) { $ok = (Restore-RegistrySnapshot $snap.T1) -and $ok }
-            if ($snap.T2) { $ok = (Restore-RegistrySnapshot $snap.T2) -and $ok }
-            return $ok
-        }
-    },
-    [PSCustomObject]@{
-        Id='mouseslider'; Cat='Windows'; Name='Maus: Slider Mitte (6/11)'; Admin=$false
-        Desc='1:1 DPI-Mapping ohne Software-Skalierung'; Impact='KEIN'; ImpactDetail=''
-        Changes = @('HKCU\Control Panel\Mouse', 'MouseSensitivity = 10 (= Mitte)')
-        StatusFn = {
-            $v = (Get-ItemProperty 'HKCU:\Control Panel\Mouse' -Name 'MouseSensitivity' -ErrorAction SilentlyContinue).MouseSensitivity
-            if ($v -eq '10') { 'OK' } else { 'BAD' }
-        }
-        SnapshotFn = { Get-RegistrySnapshot -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSensitivity' }
-        ApplyFn = {
-            try {
-                Set-ItemProperty 'HKCU:\Control Panel\Mouse' -Name 'MouseSensitivity' -Value '10' -Type String -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = { param($snap) Restore-RegistrySnapshot $snap }
-    },
-    [PSCustomObject]@{
-        Id='fso'; Cat='PUBG'; Name='Vollbildoptimierungen TslGame.exe: AUS'; Admin=$false
-        Desc='Ermoeglicht Mode 3 (Hardware Independent Flip) statt Compose-Copy'; Impact='KEIN'; ImpactDetail=''
-        Changes = @(
-            'HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers',
-            'Wert: <PUBG-Pfad>\TslGame.exe = "~ DISABLEDXMAXIMIZEDWINDOWEDMODE HIGHDPIAWARE"',
-            'PUBG-Pfad wird via Steam-Manifest (libraryfolders.vdf) automatisch erkannt'
-        )
-        StatusFn = {
-            $layers = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers' -ErrorAction SilentlyContinue
-            if (-not $layers) { return 'WARN' }
-            $tsl = $layers.PSObject.Properties | Where-Object { $_.Name -match 'TslGame.*\.exe$' } | Select-Object -First 1
-            if ($tsl -and $tsl.Value -match 'DISABLEDXMAXIMIZEDWINDOWEDMODE') { 'OK' } else { 'WARN' }
-        }
-        SnapshotFn = {
-            # Aktuelle Compat-Flags pro vorhandenem TslGame Eintrag sichern
-            $path = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
-            $existing = @()
-            if (Test-Path $path) {
-                $props = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
-                if ($props) {
-                    foreach ($prop in ($props.PSObject.Properties | Where-Object { $_.Name -match 'TslGame.*\.exe$' })) {
-                        $existing += @{ Name = $prop.Name; OldValue = $prop.Value }
-                    }
-                }
-            }
-            return @{ Path = $path; Entries = $existing }
-        }
-        ApplyFn = {
-            try {
-                $steamPath = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
-                $tslExe = $null
-                if ($steamPath -and (Test-Path "$steamPath\steamapps\libraryfolders.vdf")) {
-                    $libContent = Get-Content "$steamPath\steamapps\libraryfolders.vdf" -Raw
-                    $libs = [regex]::Matches($libContent, '"path"\s+"([^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '\\\\','\' }
-                    foreach ($lib in $libs) {
-                        $cand = Join-Path $lib 'steamapps\common\PUBG\TslGame\Binaries\Win64\TslGame.exe'
-                        if (Test-Path $cand) { $tslExe = $cand; break }
-                    }
-                }
-                if (-not $tslExe) { return $false }
-                $path = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
-                if (-not (Test-Path $path)) { New-Item $path -Force -ErrorAction Stop | Out-Null }
-                Set-ItemProperty $path -Name $tslExe -Value '~ DISABLEDXMAXIMIZEDWINDOWEDMODE HIGHDPIAWARE' -Type String -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            try {
-                if (-not $snap) { return $false }
-                if (-not (Test-Path $snap.Path)) { return $true }
-                # Aktuelle TslGame-Eintraege loeschen
-                $props = Get-ItemProperty -Path $snap.Path -ErrorAction SilentlyContinue
-                if ($props) {
-                    foreach ($prop in ($props.PSObject.Properties | Where-Object { $_.Name -match 'TslGame.*\.exe$' })) {
-                        Remove-ItemProperty -Path $snap.Path -Name $prop.Name -ErrorAction SilentlyContinue
-                    }
-                }
-                # Pre-State wiederherstellen
-                foreach ($e in $snap.Entries) {
-                    Set-ItemProperty -Path $snap.Path -Name $e.Name -Value $e.OldValue -Type String -ErrorAction SilentlyContinue
-                }
-                return $true
-            } catch { return $false }
-        }
-    },
-    [PSCustomObject]@{
-        Id='engineini'; Cat='PUBG'; Name='Engine.ini Tweaks (Sharpen + Streaming + Pacing + AllowTearing)'; Admin=$false
-        Desc='Spotting-Buff + bessere 1%-Lows + Hardware Independent Flip. BattlEye-safe. Datei wird Read-Only damit PUBG sie beim naechsten Start nicht ueberschreibt.'; Impact='GERING'; ImpactDetail='Engine.ini ist nach Apply read-only - PUBG-interne r.setres-Aenderungen werden geblockt (kein Game-Crash, nur Reset-via-PUBG-Menue funktioniert nicht mehr bis Revert).'
-        Changes = @(
-            'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\Engine.ini',
-            'Backup vor Aenderung als .bak_<timestamp>',
-            '[SystemSettings] r.Tonemapper.Sharpen=0.7  (Spotting auf Distanz)',
-            '[SystemSettings] r.GTSyncType=1            (glattere Frametimes)',
-            '[SystemSettings] r.OneFrameThreadLag=0     (Frame-Pacing)',
-            '[SystemSettings] r.FinishCurrentFrame=0    (Frame-Pacing)',
-            '[SystemSettings] r.D3D11.UseAllowTearing=1 (DXGI Flip-Model: Hardware Independent Flip)',
-            '[/Script/Engine.RendererSettings] r.Streaming.PoolSize=4096',
-            '[/Script/Engine.RendererSettings] r.Streaming.HLODStrategy=2',
-            '[/Script/Engine.RendererSettings] r.Streaming.FramesForFullUpdate=1',
-            'Nach Apply: Datei-Attribut ReadOnly (PUBG ueberschreibt sonst beim Spielstart)'
-        )
-        StatusFn = {
-            $eng = Get-PUBGEnginePath
-            if (-not (Test-Path $eng)) { return 'SKIP' }
-            $c = Get-Content $eng -Raw
-            $hasSharpen = $c -match 'r\.Tonemapper\.Sharpen\s*=\s*0\.7'
-            $hasStreaming = $c -match 'r\.Streaming\.PoolSize\s*=\s*4096'
-            $hasGTSync = $c -match 'r\.GTSyncType\s*=\s*1'
-            $hasTearing = $c -match 'r\.D3D11\.UseAllowTearing\s*=\s*1'
-            if ($hasSharpen -and $hasStreaming -and $hasGTSync -and $hasTearing) { 'OK' } else { 'WARN' }
-        }
-        SnapshotFn = {
-            $eng = Get-PUBGEnginePath
-            if (Test-Path $eng) {
-                $wasReadOnly = $false
-                try {
-                    $attr = (Get-Item $eng -Force).Attributes
-                    $wasReadOnly = ($attr -band [System.IO.FileAttributes]::ReadOnly) -ne 0
-                } catch {}
-                $bak = Copy-FileToBackup -SourcePath $eng
-                return @{ BackupPath = $bak; OriginalPath = $eng; WasReadOnly = $wasReadOnly }
-            }
-            return $null
-        }
-        ApplyFn = {
-            try {
-                $eng = Get-PUBGEnginePath
-                if (-not (Test-Path $eng)) { return $false }
-                # Falls Datei aus vorherigem Apply noch read-only ist: erst writable machen
-                try {
-                    $f = Get-Item $eng -Force
-                    if (($f.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
-                        $f.Attributes = $f.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
-                    }
-                } catch {}
-                $tweaks = @{
-                    'SystemSettings' = @{
-                        'r.Tonemapper.Sharpen' = '0.7'
-                        'r.OneFrameThreadLag' = '0'
-                        'r.FinishCurrentFrame' = '0'
-                        'r.GTSyncType' = '1'
-                        'r.D3D11.UseAllowTearing' = '1'
-                    }
-                    '/Script/Engine.RendererSettings' = @{
-                        'r.Streaming.PoolSize' = '4096'
-                        'r.Streaming.HLODStrategy' = '2'
-                        'r.Streaming.FramesForFullUpdate' = '1'
-                    }
-                }
-                foreach ($sec in $tweaks.Keys) {
-                    foreach ($k in $tweaks[$sec].Keys) {
-                        $ok = Update-IniValue -Path $eng -Section $sec -Key $k -Value $tweaks[$sec][$k]
-                        if (-not $ok) { return $false }
-                    }
-                }
-                # SCHUTZ gegen PUBG-Overwrite: Datei nach erfolgreichem Write read-only setzen
-                try {
-                    $f2 = Get-Item $eng -Force
-                    $f2.Attributes = $f2.Attributes -bor [System.IO.FileAttributes]::ReadOnly
-                    Write-SuiteLog "Engine.ini: ReadOnly-Attribut gesetzt (PUBG-Overwrite-Schutz)" 'INFO'
-                } catch {
-                    Write-SuiteLog "Engine.ini: ReadOnly konnte nicht gesetzt werden - PUBG ueberschreibt eventuell: $($_.Exception.Message)" 'WARN'
-                }
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            if ($snap -and $snap.BackupPath -and $snap.OriginalPath) {
-                # ReadOnly entfernen bevor wir die Datei ersetzen
-                try {
-                    if (Test-Path $snap.OriginalPath) {
-                        $f = Get-Item $snap.OriginalPath -Force
-                        if (($f.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
-                            $f.Attributes = $f.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
-                        }
-                    }
-                } catch {}
-                return (Restore-FileFromBackup -BackupPath $snap.BackupPath -TargetPath $snap.OriginalPath)
-            }
-            return $false
-        }
-    },
-    [PSCustomObject]@{
-        Id='fpscap'; Cat='PUBG'; Name='PUBG FPS-Cap = Monitor-Hz minus 3'; Admin=$false
-        Desc='Auto-Cap basierend auf Monitor-Hz fuer G-Sync/Reflex Window'; Impact='KEIN'; ImpactDetail=''
-        Changes = @(
-            'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini',
-            'Backup vor Aenderung als .bak_<timestamp>',
-            'Cap wird dynamisch berechnet: aktuelle Primary-Monitor-Hz minus 3',
-            'Beispiele: 240Hz -> 237, 165Hz -> 162, 144Hz -> 141, 360Hz -> 357'
-        )
-        StatusFn = {
-            $gus = Get-PUBGGameUserPath
-            if (-not (Test-Path $gus)) { return 'SKIP' }
-            $target = Get-OptimalFpsCap
-            $c = Get-Content $gus -Raw
-            if ($c -match '(?m)^FrameRateLimit=([\d.]+)') {
-                $v = [int][math]::Floor([double]$matches[1])
-                if ($v -eq $target) { 'OK' } else { 'WARN' }
-            } else { 'WARN' }
-        }
-        SnapshotFn = {
-            $gus = Get-PUBGGameUserPath
-            if (Test-Path $gus) {
-                $bak = Copy-FileToBackup -SourcePath $gus
-                return @{ BackupPath = $bak; OriginalPath = $gus }
-            }
-            return $null
-        }
-        ApplyFn = {
-            try {
-                $gus = Get-PUBGGameUserPath
-                if (-not (Test-Path $gus)) { return $false }
-                $target = Get-OptimalFpsCap
-                $c = Get-Content $gus -Raw
-                $newVal = "$target.000000"
-                if ($c -match '(?m)^FrameRateLimit=') {
-                    $c = $c -replace '(?m)^FrameRateLimit=[^\r\n]+',"FrameRateLimit=$newVal"
-                } else {
-                    $c += "`r`nFrameRateLimit=$newVal`r`n"
-                }
-                Set-Content $gus -Value $c -NoNewline -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            if ($snap -and $snap.BackupPath -and $snap.OriginalPath) {
-                return (Restore-FileFromBackup -BackupPath $snap.BackupPath -TargetPath $snap.OriginalPath)
-            }
-            return $false
-        }
-    },
-    [PSCustomObject]@{
-        Id='esportgfx'; Cat='PUBG'; Name='PUBG Esport-Grafik (Competitive-Profil)'; Admin=$false
-        Desc='Setzt PUBGs In-Game-Grafik aufs Competitive-Profil: Exklusiv-Vollbild, Sicht-Blocker niedrig, Spotting-Klarheit hoch. Alle Werte menue-konform (BattlEye-safe).'
-        Impact='MITTEL'
-        ImpactDetail='Aendert dein In-Game-Grafikmenue (geringere Detailstufe). PUBG muss beim Apply GESCHLOSSEN sein, sonst ueberschreibt es die Datei beim Beenden. Aufloesung bleibt unveraendert. Voll reversibel via Datei-Backup.'
-        Changes = @(
-            'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini',
-            'Backup vor Aenderung als .bak_<timestamp> (Revert stellt es wieder her)',
-            'WICHTIG: PUBG muss beim Apply geschlossen sein',
-            'Aufloesung wird NICHT veraendert - nur Anzeigemodus + Qualitaet',
-            '[ScalabilityGroups] sg.ViewDistanceQuality=2  (Sichtweite: Mittel)',
-            '[ScalabilityGroups] sg.AntiAliasingQuality=2  (Anti-Aliasing: Mittel - klare Kanten auf Distanz)',
-            '[ScalabilityGroups] sg.ShadowQuality=0        (Schatten: Sehr Niedrig - Gegner-Schatten bleiben sichtbar)',
-            '[ScalabilityGroups] sg.PostProcessQuality=0   (Post-Processing: Sehr Niedrig - kein Bloom/Haze)',
-            '[ScalabilityGroups] sg.TextureQuality=3       (Texturen: Hoch - Spotting-Klarheit, kostet kaum FPS)',
-            '[ScalabilityGroups] sg.EffectsQuality=0       (Effekte: Sehr Niedrig)',
-            '[ScalabilityGroups] sg.FoliageQuality=0       (Laub: Sehr Niedrig - liegende Gegner besser sichtbar)',
-            '[ScalabilityGroups] sg.ResolutionQuality=100  (volle Render-Skalierung)',
-            '[TslGameUserSettings] ScreenScale=100         (kein Upscaling-Blur)',
-            '[TslGameUserSettings] FullscreenMode=0        (Exklusiv-Vollbild - niedrigste Latenz)',
-            '[TslGameUserSettings] bUseVSync=False         (V-Sync aus - kein Input-Lag)',
-            '[TslGameUserSettings] bMotionBlur=False       (Bewegungsunschaerfe aus)',
-            '[TslGameUserSettings] bSharpen=False          (In-Game-Sharpen aus - Engine.ini-Tweak schaerft bereits)',
-            '[TslGameUserSettings] bSavedGraphicOption=True (PUBG behandelt Werte als user-gewaehlt - kein Auto-Reset)'
-        )
-        StatusFn = {
-            $gus = Get-PUBGGameUserPath
-            if (-not (Test-Path $gus)) { return 'SKIP' }
-            $c = Get-Content $gus -Raw -ErrorAction SilentlyContinue
-            if ([string]::IsNullOrWhiteSpace($c)) { return 'SKIP' }
-            # Kern-Keys pruefen (Integer/Bool - Floats wie ScreenScale bewusst ausgelassen,
-            # da PUBG die Nachkommastellen unterschiedlich normalisieren kann).
-            $checks = @(
-                '(?m)^FullscreenMode=0\b'
-                '(?m)^bSavedGraphicOption=True\b'
-                '(?m)^bMotionBlur=False\b'
-                '(?m)^bUseVSync=False\b'
-                '(?m)^sg\.ShadowQuality=0\b'
-                '(?m)^sg\.PostProcessQuality=0\b'
-                '(?m)^sg\.EffectsQuality=0\b'
-                '(?m)^sg\.FoliageQuality=0\b'
-                '(?m)^sg\.AntiAliasingQuality=2\b'
-                '(?m)^sg\.TextureQuality=3\b'
-                '(?m)^sg\.ViewDistanceQuality=2\b'
-            )
-            foreach ($rx in $checks) { if ($c -notmatch $rx) { return 'WARN' } }
-            return 'OK'
-        }
-        SnapshotFn = {
-            $gus = Get-PUBGGameUserPath
-            if (Test-Path $gus) {
-                $bak = Copy-FileToBackup -SourcePath $gus
-                return @{ BackupPath = $bak; OriginalPath = $gus }
-            }
-            return $null
-        }
-        ApplyFn = {
-            try {
-                $gus = Get-PUBGGameUserPath
-                if (-not (Test-Path $gus)) {
-                    Write-SuiteLog "esportgfx: GameUserSettings.ini nicht gefunden - PUBG mind. einmal starten und beenden" 'WARN'
-                    return $false
-                }
-                # PUBG darf nicht laufen - es ueberschreibt GameUserSettings.ini beim Beenden
-                if (@(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue).Count -gt 0) {
-                    Write-SuiteLog "esportgfx: PUBG laeuft - bitte PUBG erst komplett beenden, dann Apply" 'WARN'
-                    return $false
-                }
-                foreach ($section in $Global:EsportGfxProfile.Keys) {
-                    foreach ($key in $Global:EsportGfxProfile[$section].Keys) {
-                        $ok = Update-IniValue -Path $gus -Section $section -Key $key -Value $Global:EsportGfxProfile[$section][$key]
-                        if (-not $ok) {
-                            Write-SuiteLog "esportgfx: Update fehlgeschlagen bei [$section] $key" 'ERROR'
-                            return $false
-                        }
-                    }
-                }
-                Write-SuiteLog "esportgfx: Competitive-Grafik-Profil in GameUserSettings.ini geschrieben" 'INFO'
-                return $true
-            } catch {
-                Write-SuiteLog "esportgfx ApplyFn Exception: $($_.Exception.Message)" 'ERROR'
-                return $false
-            }
-        }
-        RevertFn = {
-            param($snap)
-            if ($snap -and $snap.BackupPath -and $snap.OriginalPath) {
-                return (Restore-FileFromBackup -BackupPath $snap.BackupPath -TargetPath $snap.OriginalPath)
-            }
-            return $false
-        }
-    },
-    [PSCustomObject]@{
-        Id='defender'; Cat='System'; Name='Defender Exclusion fuer PUBG-Ordner'; Admin=$true
-        Desc='1-4% FPS + besseres Map-Streaming'; Impact='GERING'
-        ImpactDetail='Risiko nur bei Mods/Cheats im Ordner'
-        Changes = @(
-            'Add-MpPreference -ExclusionPath <PUBG-Pfad aus Steam-Manifest>',
-            'Bewirkt: Windows Defender Real-Time Scan ueberspringt PUBG-Ordner'
-        )
-        StatusFn = {
-            try {
-                $excl = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
-                if ($excl -and ($excl -match 'PUBG|TslGame')) { 'OK' } else { 'WARN' }
-            } catch { 'SKIP' }
-        }
-        SnapshotFn = {
-            try {
-                $excl = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
-                $pubgExcl = $excl | Where-Object { $_ -match 'PUBG|TslGame' }
-                return @{ PreExisting = @($pubgExcl) }
-            } catch { return $null }
-        }
-        ApplyFn = {
-            try {
-                $steamPath = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
-                if (-not $steamPath) { return $false }
-                $libContent = Get-Content "$steamPath\steamapps\libraryfolders.vdf" -Raw
-                $libs = [regex]::Matches($libContent, '"path"\s+"([^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '\\\\','\' }
-                foreach ($lib in $libs) {
-                    $pubg = Join-Path $lib 'steamapps\common\PUBG'
-                    if (Test-Path $pubg) {
-                        Add-MpPreference -ExclusionPath $pubg -ErrorAction Stop
-                        return $true
-                    }
-                }
-                return $false
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            try {
-                $cur = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
-                $pubgNow = @($cur | Where-Object { $_ -match 'PUBG|TslGame' })
-                $preExisting = if ($snap -and $snap.PreExisting) { @($snap.PreExisting) } else { @() }
-                # Loesche nur die Exclusions die NICHT vor Apply schon da waren
-                foreach ($e in $pubgNow) {
-                    if ($e -notin $preExisting) {
-                        Remove-MpPreference -ExclusionPath $e -ErrorAction SilentlyContinue
-                    }
-                }
-                return $true
-            } catch { return $false }
-        }
-    },
-    [PSCustomObject]@{
-        Id='hvci'; Cat='System'; Name='Virtualization Security (VBS + HVCI): AUS'; Admin=$true
-        Desc='5-10% FPS in CPU-bound Games (Toms Hardware Benchmark). Erfordert Reboot. Win11 24H2 reaktiviert VBS sonst bei Feature-Updates.'; Impact='MITTEL'
-        ImpactDetail='Senkt OS-Security: kein Memory Integrity (HVCI), kein Credential Guard, kein Hyper-V-Hypervisor. Bei Solo-Gaming + bewusster Auswahl ok - bei Multi-User-PC ueberlegen.'
-        Changes = @(
-            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\EnableVirtualizationBasedSecurity = 0',
-            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity\Enabled = 0',
-            'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard\Enabled = 0',
-            'bcdedit /set hypervisorlaunchtype off  (kritisch fuer 24H2 - sonst reaktiviert Windows VBS)',
-            'WICHTIG: greift erst nach REBOOT'
-        )
-        StatusFn = {
-            try {
-                $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction Stop
-                # Korrekte Logik:
-                # - HVCI oder CredGuard laufen -> BAD (volle 5-10% Penalty)
-                # - Nur Hypervisor laeuft, Services aus -> WARN (~1-3% SLAT, nur via UEFI/bcdedit komplett aus)
-                # - Alles aus -> OK
-                $running = @($dg.SecurityServicesRunning)
-                $hvciOn = $running -contains 2
-                $credGuardOn = $running -contains 1
-                $hyperVUp = ($dg.VirtualizationBasedSecurityStatus -eq 2)
-                if ($hvciOn -or $credGuardOn) { 'BAD' }
-                elseif ($hyperVUp) { 'WARN' }
-                else { 'OK' }
-            } catch { 'SKIP' }
-        }
-        SnapshotFn = {
-            $rootDG = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
-            $hvciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
-            $credGuardKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard'
-            # bcdedit-State auslesen
-            $hvLaunchType = 'auto'
-            try {
-                $bcdOut = & bcdedit /enum '{current}' 2>$null | Out-String
-                if ($bcdOut -match '(?im)^\s*hypervisorlaunchtype\s+(\w+)') { $hvLaunchType = $matches[1] }
-            } catch {}
-            return @{
-                Vbs = (Get-RegistrySnapshot -Path $rootDG -Name 'EnableVirtualizationBasedSecurity')
-                Hvci = (Get-RegistrySnapshot -Path $hvciKey -Name 'Enabled')
-                CredGuard = (Get-RegistrySnapshot -Path $credGuardKey -Name 'Enabled')
-                HvLaunchType = $hvLaunchType
-            }
-        }
-        ApplyFn = {
-            try {
-                $rootDG = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
-                $hvciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
-                $credGuardKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard'
-                foreach ($p in @($rootDG,$hvciKey,$credGuardKey)) {
-                    if (-not (Test-Path $p)) { New-Item $p -Force -ErrorAction Stop | Out-Null }
-                }
-                Set-ItemProperty $rootDG -Name 'EnableVirtualizationBasedSecurity' -Value 0 -Type DWord -ErrorAction Stop
-                Set-ItemProperty $hvciKey -Name 'Enabled' -Value 0 -Type DWord -ErrorAction Stop
-                Set-ItemProperty $credGuardKey -Name 'Enabled' -Value 0 -Type DWord -ErrorAction Stop
-                # Hypervisor-Launch-Type aus - kritisch fuer 24H2, sonst reaktiviert Windows VBS automatisch
-                $bcdOut = & bcdedit /set hypervisorlaunchtype off 2>&1
-                if ($LASTEXITCODE -ne 0) {
-                    Write-SuiteLog "bcdedit failed: $bcdOut" 'WARN'
-                    # nicht hart abbrechen - die Registry-Aenderungen helfen schon
-                }
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            $ok = $true
-            if ($snap.Vbs)        { $ok = (Restore-RegistrySnapshot $snap.Vbs)        -and $ok }
-            if ($snap.Hvci)       { $ok = (Restore-RegistrySnapshot $snap.Hvci)       -and $ok }
-            if ($snap.CredGuard)  { $ok = (Restore-RegistrySnapshot $snap.CredGuard)  -and $ok }
-            # bcdedit zurueck auf vorherigen Wert (default = auto)
-            if ($snap.HvLaunchType) {
-                try {
-                    & bcdedit /set hypervisorlaunchtype $snap.HvLaunchType 2>&1 | Out-Null
-                } catch { $ok = $false }
-            }
-            return $ok
-        }
-    },
-    [PSCustomObject]@{
-        Id='hags'; Cat='System'; Name='Hardware-accelerated GPU Scheduling (HAGS): AN'; Admin=$true
-        Desc='Verschiebt GPU-Queue-Submit + VRAM-Management auf dedizierten GPU-MCU. Voraussetzung fuer DLSS-Frame-Generation und voll funktionsfaehigen NVIDIA Reflex.'; Impact='GERING'
-        ImpactDetail='PUBG-spezifisch unklar - kein publizierter A/B-Test. UE4 hatte in einigen Titeln Shader-Compile-Stutter mit HAGS=ON. PUBG hat keine DLSS-FG, der Hauptvorteil entfaellt also. Aber: schadet meist auch nicht. Default: nicht in Apply-All - manuell testen.'
-        Changes = @(
-            'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode',
-            'HwSchMode = 2 (0=disabled, 2=enabled, REG_DWORD)',
-            'WICHTIG: greift erst nach REBOOT'
-        )
-        StatusFn = {
-            try {
-                $v = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -ErrorAction SilentlyContinue).HwSchMode
-                if ($null -eq $v) { 'SKIP' }
-                elseif ($v -eq 2) { 'OK' }
-                else { 'WARN' }
-            } catch { 'SKIP' }
-        }
-        SnapshotFn = { Get-RegistrySnapshot -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' }
-        ApplyFn = {
-            try {
-                $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
-                if (-not (Test-Path $key)) { New-Item $key -Force -ErrorAction Stop | Out-Null }
-                Set-ItemProperty $key -Name 'HwSchMode' -Value 2 -Type DWord -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = { param($snap) Restore-RegistrySnapshot $snap }
-    },
-    [PSCustomObject]@{
-        Id='mmcss'; Cat='System'; Name='MMCSS Gaming-Profil'; Admin=$true
-        Desc='Gibt Multimedia-Threads mehr CPU, stoppt Network-Throttle'; Impact='KEIN'; ImpactDetail=''
-        Changes = @(
-            'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile',
-            'SystemResponsiveness = 10 (statt 20 Default)',
-            'NetworkThrottlingIndex = 0xFFFFFFFF (deaktiviert 10ms-Throttle)'
-        )
-        StatusFn = {
-            $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-            $r = (Get-ItemProperty $k -Name 'SystemResponsiveness' -ErrorAction SilentlyContinue).SystemResponsiveness
-            $n = (Get-ItemProperty $k -Name 'NetworkThrottlingIndex' -ErrorAction SilentlyContinue).NetworkThrottlingIndex
-            # Robuster Vergleich: 0xFFFFFFFF kommt als String "4294967295" (UInt32) ODER -1 (Int32, signed) zurueck
-            # je nach PS-Version. String-Cast macht beides gleich vergleichbar.
-            $nStr = "$n"
-            $nOk = ($nStr -eq '-1') -or ($nStr -eq '4294967295')
-            if ($r -le 10 -and $nOk) { 'OK' } else { 'WARN' }
-        }
-        SnapshotFn = {
-            $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-            @{
-                SysResp = (Get-RegistrySnapshot -Path $k -Name 'SystemResponsiveness')
-                NetThrot = (Get-RegistrySnapshot -Path $k -Name 'NetworkThrottlingIndex')
-            }
-        }
-        ApplyFn = {
-            try {
-                $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-                Set-ItemProperty $k -Name 'SystemResponsiveness' -Value 10 -Type DWord -ErrorAction Stop
-                & reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' /v 'NetworkThrottlingIndex' /t REG_DWORD /d 0xFFFFFFFF /f | Out-Null
-                if ($LASTEXITCODE -ne 0) { return $false }
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            $ok = $true
-            if ($snap.SysResp) { $ok = (Restore-RegistrySnapshot $snap.SysResp) -and $ok }
-            if ($snap.NetThrot) { $ok = (Restore-RegistrySnapshot $snap.NetThrot) -and $ok }
-            return $ok
-        }
-    },
-    [PSCustomObject]@{
-        Id='services'; Cat='System'; Name='Game-unfriendly Services disablen'; Admin=$true
-        Desc='Stoppt Background-Scan/Indexer/Telemetry waehrend Match'; Impact='GERING'
-        ImpactDetail='Windows-Suche ohne WSearch langsamer (paar Sek), Indexierung-Files bleiben verfuegbar'
-        Changes = @(
-            'sc.exe / Set-Service: SysMain (SuperFetch/Prefetch)',
-            'sc.exe / Set-Service: WSearch (Windows Search Indexer)',
-            'sc.exe / Set-Service: DiagTrack (Connected User Experiences and Telemetry)',
-            'sc.exe / Set-Service: MapsBroker',
-            'Aktion: StartupType = Disabled + Stop-Service'
-        )
-        StatusFn = {
-            $svcs = 'SysMain','WSearch','DiagTrack','MapsBroker'
-            $running = @($svcs | ForEach-Object { Get-Service -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_.Status -eq 'Running' })
-            if ($running.Count -eq 0) { 'OK' } else { 'WARN' }
-        }
-        SnapshotFn = {
-            $states = @()
-            foreach ($s in 'SysMain','WSearch','DiagTrack','MapsBroker') {
-                $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
-                if ($svc) {
-                    $states += @{ Name = $s; StartType = [string]$svc.StartType; Status = [string]$svc.Status }
-                }
-            }
-            return @{ Services = $states }
-        }
-        ApplyFn = {
-            try {
-                $fails = 0
-                foreach ($s in 'SysMain','WSearch','DiagTrack','MapsBroker') {
-                    try {
-                        Set-Service -Name $s -StartupType Disabled -ErrorAction Stop
-                        Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
-                    } catch { $fails++ }
-                }
-                return ($fails -eq 0)
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            $ok = $true
-            if ($snap -and $snap.Services) {
-                foreach ($s in $snap.Services) {
-                    try {
-                        Set-Service -Name $s.Name -StartupType $s.StartType -ErrorAction Stop
-                        if ($s.Status -eq 'Running') {
-                            Start-Service -Name $s.Name -ErrorAction SilentlyContinue
-                        }
-                    } catch { $ok = $false }
-                }
-            }
-            return $ok
-        }
-    },
-    [PSCustomObject]@{
-        Id='nicoffload'; Cat='System'; Name='NIC Offloads (LSO, RSC) deaktivieren'; Admin=$true
-        Desc='Reduziert Network-Latency fuer Gaming (UDP)'; Impact='KEIN'; ImpactDetail=''
-        Changes = @(
-            'Disable-NetAdapterLso -IPv4 -IPv6 (Large Send Offload aus)',
-            'Disable-NetAdapterRsc -IPv4 -IPv6 (Receive Segment Coalescing aus)',
-            'Aktiv aktiver Adapter (erster Up/Non-Virtual)'
-        )
-        StatusFn = {
-            $nic = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and -not $_.Virtual } | Select-Object -First 1
-            if (-not $nic) { return 'SKIP' }
-            $lso = Get-NetAdapterLso -Name $nic.Name -ErrorAction SilentlyContinue
-            $rsc = Get-NetAdapterRsc -Name $nic.Name -ErrorAction SilentlyContinue
-            $bad = $false
-            if ($lso -and ($lso.V2IPv4Enabled -or $lso.V2IPv6Enabled)) { $bad = $true }
-            if ($rsc -and ($rsc.IPv4Enabled -or $rsc.IPv6Enabled)) { $bad = $true }
-            if ($bad) { 'WARN' } else { 'OK' }
-        }
-        SnapshotFn = {
-            $nic = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and -not $_.Virtual } | Select-Object -First 1
-            if (-not $nic) { return $null }
-            $lso = Get-NetAdapterLso -Name $nic.Name -ErrorAction SilentlyContinue
-            $rsc = Get-NetAdapterRsc -Name $nic.Name -ErrorAction SilentlyContinue
-            return @{
-                NicName = $nic.Name
-                LsoV4 = if ($lso) { $lso.V2IPv4Enabled } else { $null }
-                LsoV6 = if ($lso) { $lso.V2IPv6Enabled } else { $null }
-                RscV4 = if ($rsc) { $rsc.IPv4Enabled } else { $null }
-                RscV6 = if ($rsc) { $rsc.IPv6Enabled } else { $null }
-            }
-        }
-        ApplyFn = {
-            try {
-                $nic = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and -not $_.Virtual } | Select-Object -First 1
-                if (-not $nic) { return $false }
-                Disable-NetAdapterLso -Name $nic.Name -IPv4 -IPv6 -ErrorAction Stop
-                Disable-NetAdapterRsc -Name $nic.Name -IPv4 -IPv6 -ErrorAction Stop
-                return $true
-            } catch { return $false }
-        }
-        RevertFn = {
-            param($snap)
-            try {
-                if (-not $snap -or -not $snap.NicName) { return $false }
-                if ($snap.LsoV4) { Enable-NetAdapterLso -Name $snap.NicName -IPv4 -ErrorAction SilentlyContinue }
-                if ($snap.LsoV6) { Enable-NetAdapterLso -Name $snap.NicName -IPv6 -ErrorAction SilentlyContinue }
-                if ($snap.RscV4) { Enable-NetAdapterRsc -Name $snap.NicName -IPv4 -ErrorAction SilentlyContinue }
-                if ($snap.RscV6) { Enable-NetAdapterRsc -Name $snap.NicName -IPv6 -ErrorAction SilentlyContinue }
-                return $true
-            } catch { return $false }
-        }
-    },
-    [PSCustomObject]@{
-        Id='nvprofile'; Cat='PUBG'; Name='NVIDIA PUBG-Profil (Low Latency, Power Max, etc.)'; Admin=$false
-        Desc='Setzt 6 NV-Treiber-Werte fuer PUBG-Profil via NPI'
-        Impact='KEIN'; ImpactDetail='NPI wird auto-installiert falls fehlt'
-        Changes = @(
-            'Tool: NVIDIA Profile Inspector (auto-Install nach C:\Tools\nvidiaProfileInspector\)',
-            'Profil-Name: PLAYERUNKNOWN''S BATTLEGROUNDS',
-            'Power Management Mode = Prefer Max Performance',
-            'Vertical Sync = Force OFF',
-            'Texture Filtering Quality = High Performance',
-            'Threaded Optimization = ON',
-            'Low Latency Mode = Ultra (Reflex-equivalent)',
-            'Frame Rate Limiter v3 = 237 FPS',
-            'Antialiasing Mode = Application Controlled',
-            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp'
-        )
-        StatusFn = {
-            if (Test-Path $Global:Suite.NPIStamp) {
-                $age = (Get-Date) - (Get-Item $Global:Suite.NPIStamp).LastWriteTime
-                if ($age.TotalDays -lt 60) { return 'OK' }
-            }
-            return 'WARN'
-        }
-        ApplyFn = {
-            try {
-                $npi = Get-NPIPath
-                if (-not $npi) {
-                    $npi = Install-NPIFromGitHub
-                    if (-not $npi) { return $false }
-                }
-                Invoke-NPIPubgProfile -NpiPath $npi
-                return (Test-Path $Global:Suite.NPIStamp)
-            } catch { return $false }
         }
     }
-)
+    if ($mismatch.Count -eq 0) {
+        return @{ Status='OK'; CurrentValue='alle Profil-Werte gesetzt'; Detail='' }
+    }
+    $preview = ($mismatch | Select-Object -First 4) -join ', '
+    return @{ Status='TWEAK'
+              CurrentValue="$($mismatch.Count) Wert(e) abweichend: $preview"
+              Detail='Grafik-Profil ueber den Grafik-Tab anwenden' }
+}
 
-# Das esportgfx-Tweak wird bewusst aus $Global:Tweaks herausgeloest: es bekommt
-# einen eigenen "Grafik"-Tab mit separatem Apply/Revert und wird NICHT von
-# "Apply All"/"Apply Selected" miterfasst - die In-Game-Grafik ist zu wichtig,
-# um sie pauschal mit den System-Tweaks anzuwenden.
-$Global:EsportGfxTweak = $Global:Tweaks | Where-Object { $_.Id -eq 'esportgfx' } | Select-Object -First 1
-$Global:Tweaks = @($Global:Tweaks | Where-Object { $_.Id -ne 'esportgfx' })
+# Schreibt das Profil in GameUserSettings.ini.
+# Rueckgabe: @{ Success; Message; Snapshot }
+function Invoke-EsportGfxApply {
+    try {
+        $gus = Get-PUBGGameUserPath
+        if (-not (Test-Path $gus)) {
+            return @{ Success=$false; Message='GameUserSettings.ini nicht gefunden - PUBG einmal starten/beenden'; Snapshot=$null }
+        }
+        if (-not $Global:EsportGfxProfile) {
+            return @{ Success=$false; Message='Grafikprofil nicht geladen (PUBGProfile.psd1)'; Snapshot=$null }
+        }
+        # PUBG darf nicht laufen - es ueberschreibt GameUserSettings.ini beim Beenden.
+        if (@(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue).Count -gt 0) {
+            return @{ Success=$false; Message='PUBG laeuft - bitte erst komplett beenden, dann Apply'; Snapshot=$null }
+        }
+        $bak  = Copy-FileToBackup -SourcePath $gus
+        $snap = @{ BackupPath=$bak; OriginalPath=$gus }
+        foreach ($section in $Global:EsportGfxProfile.Keys) {
+            foreach ($key in $Global:EsportGfxProfile[$section].Keys) {
+                $val = [string]$Global:EsportGfxProfile[$section][$key]
+                if (-not (Update-IniValue -Path $gus -Section $section -Key $key -Value $val)) {
+                    Write-SuiteLog "esportgfx: Update fehlgeschlagen bei [$section] $key" 'ERROR'
+                    return @{ Success=$false; Message="Schreiben fehlgeschlagen bei [$section] $key"; Snapshot=$snap }
+                }
+            }
+        }
+        # Aufloesung bleibt unveraendert, ABER LastUserConfirmedResolutionSizeX/Y
+        # werden mit der aktuellen Aufloesung synchronisiert. Zusammen mit den im
+        # Profil enthaltenen FullscreenMode/LastConfirmedFullscreenMode/Preferred-
+        # FullscreenMode akzeptiert PUBG die Werte beim Start als "zuletzt
+        # bestaetigt" und setzt das Profil nicht zurueck.
+        $cNow = Get-Content $gus -Raw -ErrorAction SilentlyContinue
+        $resSection = '/Script/TslGame.TslGameUserSettings'
+        foreach ($axis in 'X','Y') {
+            if ($cNow -and ($cNow -match "(?m)^\s*ResolutionSize$axis\s*=\s*(\d+)")) {
+                $null = Update-IniValue -Path $gus -Section $resSection -Key "LastUserConfirmedResolutionSize$axis" -Value $matches[1]
+            }
+        }
+        Write-SuiteLog 'esportgfx: Competitive-Grafik-Profil + LastUserConfirmed-Keys geschrieben' 'INFO'
+        return @{ Success=$true; Message='Competitive-Grafik-Profil angewendet'; Snapshot=$snap }
+    } catch {
+        Write-SuiteLog "esportgfx Apply Exception: $($_.Exception.Message)" 'ERROR'
+        return @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null }
+    }
+}
+
+# Stellt GameUserSettings.ini aus dem Backup wieder her.
+function Invoke-EsportGfxRevert {
+    param($Snapshot)
+    if ($Snapshot -and $Snapshot.BackupPath -and $Snapshot.OriginalPath) {
+        if (Restore-FileFromBackup -BackupPath $Snapshot.BackupPath -TargetPath $Snapshot.OriginalPath) {
+            return @{ Success=$true; Message='GameUserSettings.ini aus Backup wiederhergestellt' }
+        }
+        return @{ Success=$false; Message='Restore aus Backup fehlgeschlagen' }
+    }
+    return @{ Success=$false; Message='Kein Backup-Snapshot vorhanden' }
+}
+
+$Global:EsportGfxTweak = [PSCustomObject]@{
+    Id           = 'esportgfx'
+    Cat          = 'PUBG'
+    Name         = 'PUBG Esport-Grafik (Competitive-Profil)'
+    Desc         = 'Schreibt PUBGs In-Game-Grafik aufs Competitive-Profil aus PUBGProfile.psd1. Alle Werte menue-konform (BattlEye-safe).'
+    Admin        = $false
+    Impact       = 'MITTEL'
+    ImpactDetail = 'Aendert dein In-Game-Grafikmenue (geringere Detailstufe). PUBG muss beim Apply GESCHLOSSEN sein. Aufloesung bleibt unveraendert. Voll reversibel via Datei-Backup.'
+    Changes      = @(
+        'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini',
+        'Soll-Werte stammen aus config\PUBGProfile.psd1 (gemeinsame Quelle mit der Diagnose)',
+        'Backup vor Aenderung als .bak_<timestamp> (Revert stellt es wieder her)',
+        'WICHTIG: PUBG muss beim Apply geschlossen sein',
+        'Aufloesung wird NICHT veraendert - LastUserConfirmedResolutionSizeX/Y werden nur synchron gehalten',
+        'FullscreenMode + LastConfirmedFullscreenMode + PreferredFullscreenMode = 0 (Exklusiv-Vollbild)',
+        '[ScalabilityGroups] sg.* sowie [TslGameUserSettings] Bool-/Skalierungs-Werte laut Profil'
+    )
+    Check    = { Test-EsportGfxProfile }
+    Apply    = { Invoke-EsportGfxApply }
+    Revert   = { param($Snapshot) Invoke-EsportGfxRevert $Snapshot }
+    StatusFn = {
+        $s = (Test-EsportGfxProfile).Status
+        switch ("$s") { 'TWEAK' { 'WARN' } 'ISSUE' { 'BAD' } 'OK' { 'OK' } default { 'SKIP' } }
+    }
+}
 
 # ==================== TOOL-DETECTION & INSTALL ====================
 function Get-MMTPath {
@@ -2984,27 +2384,39 @@ function Analyze-CaptureCSV {
 }
 
 # ==================== TWEAK APPLY/REVERT WRAPPERS ====================
+# Apply/Revert arbeiten mit dem Registry-Modell: Tweak.Apply liefert
+# @{ Success; Message; Snapshot }, Tweak.Revert($Snapshot) liefert
+# @{ Success; Message }. Der Snapshot wird wie bisher in der history.json
+# abgelegt, sodass der bestehende 1-Klick-Revert weiterfunktioniert.
+function Get-TweakResult {
+    # Holt aus dem (ggf. mehrteiligen) Pipeline-Output das Ergebnis-Hashtable.
+    param($Raw)
+    $last = @($Raw) | Select-Object -Last 1
+    if ($last -is [System.Collections.IDictionary]) { return $last }
+    return $null
+}
+
 function Invoke-TweakApply {
     param($Tweak)
     Write-SuiteLog "Apply START: $($Tweak.Id) ($($Tweak.Name))"
     try {
-        $snapshot = $null
-        if ($Tweak.SnapshotFn) {
-            try { $snapshot = & $Tweak.SnapshotFn } catch { Write-SuiteLog "Snapshot fail $($Tweak.Id): $($_.Exception.Message)" 'WARN' }
+        $res = Get-TweakResult (& $Tweak.Apply)
+        $success  = $false; $snapshot = $null; $msg = 'Apply lieferte kein gueltiges Ergebnis'
+        if ($res) {
+            $success  = [bool]$res['Success']
+            $snapshot = $res['Snapshot']
+            $msg      = "$($res['Message'])"
         }
-        $result = & $Tweak.ApplyFn
-        if ($result) {
-            Add-HistoryEntry -Action 'Apply' -TweakId $Tweak.Id -Snapshot $snapshot -Success $true
-            Write-SuiteLog "Apply OK: $($Tweak.Id)" 'INFO'
-        } else {
-            Add-HistoryEntry -Action 'Apply' -TweakId $Tweak.Id -Snapshot $snapshot -Success $false -ErrorMsg 'ApplyFn returned false'
-            Write-SuiteLog "Apply FAIL: $($Tweak.Id) (ApplyFn returned false)" 'ERROR'
-        }
-        return $result
+        Add-HistoryEntry -Action 'Apply' -TweakId $Tweak.Id -Snapshot $snapshot -Success $success -ErrorMsg $(if ($success) { '' } else { $msg })
+        $Global:LastTweakMessage = $msg
+        if ($success) { Write-SuiteLog "Apply OK: $($Tweak.Id) - $msg" 'INFO' }
+        else          { Write-SuiteLog "Apply FAIL: $($Tweak.Id) - $msg" 'ERROR' }
+        return $success
     } catch {
-        $msg = $_.Exception.Message
-        Add-HistoryEntry -Action 'Apply' -TweakId $Tweak.Id -Success $false -ErrorMsg $msg
-        Write-SuiteLog "Apply EXCEPTION: $($Tweak.Id) - $msg" 'ERROR'
+        $emsg = $_.Exception.Message
+        Add-HistoryEntry -Action 'Apply' -TweakId $Tweak.Id -Success $false -ErrorMsg $emsg
+        Write-SuiteLog "Apply EXCEPTION: $($Tweak.Id) - $emsg" 'ERROR'
+        $Global:LastTweakMessage = $emsg
         return $false
     }
 }
@@ -3012,8 +2424,8 @@ function Invoke-TweakApply {
 function Invoke-TweakRevert {
     param($Tweak)
     Write-SuiteLog "Revert START: $($Tweak.Id)"
-    if (-not $Tweak.RevertFn) {
-        Write-SuiteLog "Revert FAIL: $($Tweak.Id) - keine RevertFn implementiert" 'WARN'
+    if (-not $Tweak.Revert) {
+        Write-SuiteLog "Revert FAIL: $($Tweak.Id) - keine Revert-Funktion" 'WARN'
         return $false
     }
     $snapshot = Get-LastSnapshot -TweakId $Tweak.Id
@@ -3022,26 +2434,26 @@ function Invoke-TweakRevert {
         return $false
     }
     try {
-        $result = & $Tweak.RevertFn $snapshot
-        if ($result) {
-            Add-HistoryEntry -Action 'Revert' -TweakId $Tweak.Id -Success $true
-            Write-SuiteLog "Revert OK: $($Tweak.Id)" 'INFO'
-        } else {
-            Add-HistoryEntry -Action 'Revert' -TweakId $Tweak.Id -Success $false -ErrorMsg 'RevertFn returned false'
-            Write-SuiteLog "Revert FAIL: $($Tweak.Id) (RevertFn returned false)" 'ERROR'
-        }
-        return $result
+        $res = Get-TweakResult (& $Tweak.Revert $snapshot)
+        $success = $false; $msg = 'Revert lieferte kein gueltiges Ergebnis'
+        if ($res) { $success = [bool]$res['Success']; $msg = "$($res['Message'])" }
+        Add-HistoryEntry -Action 'Revert' -TweakId $Tweak.Id -Success $success -ErrorMsg $(if ($success) { '' } else { $msg })
+        $Global:LastTweakMessage = $msg
+        if ($success) { Write-SuiteLog "Revert OK: $($Tweak.Id) - $msg" 'INFO' }
+        else          { Write-SuiteLog "Revert FAIL: $($Tweak.Id) - $msg" 'ERROR' }
+        return $success
     } catch {
-        $msg = $_.Exception.Message
-        Add-HistoryEntry -Action 'Revert' -TweakId $Tweak.Id -Success $false -ErrorMsg $msg
-        Write-SuiteLog "Revert EXCEPTION: $($Tweak.Id) - $msg" 'ERROR'
+        $emsg = $_.Exception.Message
+        Add-HistoryEntry -Action 'Revert' -TweakId $Tweak.Id -Success $false -ErrorMsg $emsg
+        Write-SuiteLog "Revert EXCEPTION: $($Tweak.Id) - $emsg" 'ERROR'
+        $Global:LastTweakMessage = $emsg
         return $false
     }
 }
 
 function Test-TweakRevertable {
     param($Tweak)
-    if (-not $Tweak.RevertFn) { return $false }
+    if (-not $Tweak.Revert) { return $false }
     return ($null -ne (Get-LastSnapshot -TweakId $Tweak.Id))
 }
 
@@ -3240,7 +2652,7 @@ function Update-TweaksTab {
         }
     })
 
-    $catOrder = @('Windows','PUBG','System')
+    $catOrder = @('Windows','GPU','Network','PUBG')
     $foundCats = $filteredTweaks | ForEach-Object { $_.Cat } | Sort-Object -Unique
     $cats = @($catOrder | Where-Object { $_ -in $foundCats }) + @($foundCats | Where-Object { $_ -notin $catOrder })
 
@@ -3405,6 +2817,11 @@ function Update-GraphicsTab {
     $ctrls.lblGfxStatus.Foreground = $si.Color
 
     # Profil-Werte menschenlesbar darstellen
+    if (-not $Global:EsportGfxProfile) {
+        $ctrls.lblGfxValues.Text = 'Profil nicht geladen - config\PUBGProfile.psd1 fehlt oder ist fehlerhaft.'
+        $ctrls.btnGfxRevert.IsEnabled = $false
+        return
+    }
     $sgScale = @{ '0'='Sehr Niedrig'; '1'='Niedrig'; '2'='Mittel'; '3'='Hoch'; '4'='Ultra' }
     $sg = $Global:EsportGfxProfile['ScalabilityGroups']
     $tg = $Global:EsportGfxProfile['/Script/TslGame.TslGameUserSettings']
