@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.12.0-beta'
+    Version    = '0.13.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1263,6 +1263,13 @@ $Global:Tweaks = @(
     }
 )
 
+# Das esportgfx-Tweak wird bewusst aus $Global:Tweaks herausgeloest: es bekommt
+# einen eigenen "Grafik"-Tab mit separatem Apply/Revert und wird NICHT von
+# "Apply All"/"Apply Selected" miterfasst - die In-Game-Grafik ist zu wichtig,
+# um sie pauschal mit den System-Tweaks anzuwenden.
+$Global:EsportGfxTweak = $Global:Tweaks | Where-Object { $_.Id -eq 'esportgfx' } | Select-Object -First 1
+$Global:Tweaks = @($Global:Tweaks | Where-Object { $_.Id -ne 'esportgfx' })
+
 # ==================== TOOL-DETECTION & INSTALL ====================
 function Get-MMTPath {
     foreach ($p in @($Global:Suite.Tools.MMT, "$env:USERPROFILE\Tools\MultiMonitorTool\MultiMonitorTool.exe")) {
@@ -1934,6 +1941,59 @@ Add-Type -AssemblyName System.Windows.Forms
                 </Grid>
             </TabItem>
 
+            <!-- TAB: GRAFIK (PUBG In-Game-Grafik, separat von Apply All) -->
+            <TabItem Header="Grafik">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20">
+                        <!-- Profil-Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid>
+                                    <TextBlock Text="PUBG Esport-Grafik (Competitive-Profil)" Style="{StaticResource SectionHeader}"/>
+                                    <Button x:Name="btnGfxRefresh" Content="Status pruefen" HorizontalAlignment="Right" Width="140" Margin="0,-4,0,0"/>
+                                </Grid>
+                                <TextBlock Foreground="#9ca3af" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10">
+                                    <Run Text="Schreibt PUBGs In-Game-Grafikmenue direkt in GameUserSettings.ini: Exklusiv-Vollbild, Sicht-Blocker niedrig, Spotting-Klarheit hoch. Alle Werte sind menue-konform (BattlEye-safe). Die Aufloesung wird NICHT veraendert."/>
+                                    <LineBreak/>
+                                    <Run Text="Bewusst getrennt von 'Apply All' - diese Einstellung ist zu wichtig fuer eine pauschale Anwendung."/>
+                                </TextBlock>
+
+                                <Border Background="#0f1115" CornerRadius="3" Padding="10,8" Margin="0,0,0,4">
+                                    <StackPanel>
+                                        <TextBlock Text="Status" Foreground="#9ca3af" FontSize="10" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="lblGfxStatus" Text="..." FontSize="13" FontWeight="Bold" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Werte-Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Profil-Werte" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock x:Name="lblGfxValues" Foreground="#d1d5db" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" LineHeight="18"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Aktions-Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Anwenden / Zuruecksetzen" Style="{StaticResource SectionHeader}"/>
+                                <Border Background="#3a2a0f" BorderBrush="#fbbf24" BorderThickness="0,0,0,2" CornerRadius="3" Padding="10,8" Margin="0,0,0,12">
+                                    <TextBlock Foreground="#fcd34d" FontSize="11" TextWrapping="Wrap"
+                                               Text="WICHTIG: PUBG muss beim Anwenden komplett geschlossen sein - sonst ueberschreibt es die Datei beim Beenden. Vor jeder Aenderung wird ein Backup erstellt."/>
+                                </Border>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="btnGfxApply" Content="Competitive-Profil anwenden" Style="{StaticResource SuccessButton}" Width="240" Height="36" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnGfxRevert" Content="Zuruecksetzen (Backup)" Style="{StaticResource DangerButton}" Width="200" Height="36"/>
+                                </StackPanel>
+                                <TextBlock x:Name="lblGfxInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- TAB 5: SETTINGS -->
             <TabItem Header="Settings">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -2048,6 +2108,7 @@ $ctrls = @{}
 foreach ($name in @('mainTabs','lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblStatusSubtitle','recoList','recoEmptyState','btnStartGameMode','btnExitGameMode',
     'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
     'btnFilterAll','btnFilterOpen','btnFilterDone',
+    'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
@@ -3321,6 +3382,110 @@ $ctrls.btnApplyAll.Add_Click({
     Update-TweaksTab; Update-StatusGrid
 })
 
+# ==================== GRAFIK TAB ====================
+# Eigener Tab fuer das PUBG Esport-Grafik-Profil ($Global:EsportGfxTweak).
+# Bewusst getrennt von "Apply All" - separates Apply/Revert.
+
+function Update-GraphicsTab {
+    if (-not $ctrls.lblGfxStatus) { return }
+    $tw = $Global:EsportGfxTweak
+    if (-not $tw) { return }
+
+    # Status
+    $status = 'SKIP'
+    try { $status = & $tw.StatusFn } catch { $status = 'SKIP' }
+    $statusInfo = @{
+        'OK'   = @{ Color='#4ade80'; Text='Profil aktiv - alle Kern-Werte gesetzt' }
+        'WARN' = @{ Color='#fbbf24'; Text='Profil nicht (vollstaendig) aktiv - Werte weichen ab' }
+        'BAD'  = @{ Color='#f87171'; Text='Profil nicht aktiv' }
+        'SKIP' = @{ Color='#9ca3af'; Text='GameUserSettings.ini nicht gefunden - PUBG mind. einmal starten und beenden' }
+    }
+    $si = $statusInfo[$status]; if (-not $si) { $si = $statusInfo['SKIP'] }
+    $ctrls.lblGfxStatus.Text = "[$status]  $($si.Text)"
+    $ctrls.lblGfxStatus.Foreground = $si.Color
+
+    # Profil-Werte menschenlesbar darstellen
+    $sgScale = @{ '0'='Sehr Niedrig'; '1'='Niedrig'; '2'='Mittel'; '3'='Hoch'; '4'='Ultra' }
+    $sg = $Global:EsportGfxProfile['ScalabilityGroups']
+    $tg = $Global:EsportGfxProfile['/Script/TslGame.TslGameUserSettings']
+    $fsMode = @{ '0'='Exklusiv-Vollbild'; '1'='Vollbild-Fenster'; '2'='Fenster' }
+    $lines = @(
+        "Anzeigemodus       : $($fsMode[$tg['FullscreenMode']])"
+        "Anti-Aliasing      : $($sgScale[$sg['sg.AntiAliasingQuality']])"
+        "Texturen           : $($sgScale[$sg['sg.TextureQuality']])"
+        "Sichtweite         : $($sgScale[$sg['sg.ViewDistanceQuality']])"
+        "Schatten           : $($sgScale[$sg['sg.ShadowQuality']])"
+        "Post-Processing    : $($sgScale[$sg['sg.PostProcessQuality']])"
+        "Effekte            : $($sgScale[$sg['sg.EffectsQuality']])"
+        "Laub               : $($sgScale[$sg['sg.FoliageQuality']])"
+        "Render-Skalierung  : 100 %"
+        "V-Sync             : Aus"
+        "Bewegungsunschaerfe: Aus"
+        "In-Game-Sharpen    : Aus"
+        "Aufloesung         : unveraendert (hardware-/monitorspezifisch)"
+    )
+    $ctrls.lblGfxValues.Text = ($lines -join "`n")
+
+    # Revert nur moeglich, wenn ein Snapshot/Backup existiert
+    $revertable = Test-TweakRevertable -Tweak $tw
+    $ctrls.btnGfxRevert.IsEnabled = $revertable
+
+    if ($Global:LastGfxInfo) {
+        $ctrls.lblGfxInfo.Text = $Global:LastGfxInfo
+    } elseif (-not $revertable) {
+        $ctrls.lblGfxInfo.Text = 'Noch nicht angewendet - kein Backup zum Zuruecksetzen vorhanden.'
+    } else {
+        $ctrls.lblGfxInfo.Text = 'Backup vorhanden - Zuruecksetzen moeglich.'
+    }
+}
+
+$ctrls.btnGfxRefresh.Add_Click({ Update-GraphicsTab })
+
+$ctrls.btnGfxApply.Add_Click({
+    $tw = $Global:EsportGfxTweak
+    if (-not $tw) { return }
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Das Competitive-Grafik-Profil wird in PUBGs GameUserSettings.ini geschrieben.`n`n" +
+        "WICHTIG: PUBG muss JETZT komplett geschlossen sein - sonst ueberschreibt es die Datei beim Beenden.`n`n" +
+        "Vor der Aenderung wird ein Backup erstellt (Zuruecksetzen spaeter moeglich).`n`nFortfahren?",
+        'Grafik-Profil anwenden', 'YesNo', 'Question')
+    if ($confirm -ne 'Yes') { return }
+    $ts = Get-Date -Format 'HH:mm:ss'
+    if (Invoke-TweakApply -Tweak $tw) {
+        $Global:LastGfxInfo = "Profil angewendet ($ts). PUBG starten und im Grafikmenue pruefen."
+        [System.Windows.MessageBox]::Show('Competitive-Grafik-Profil angewendet.', 'Grafik', 'OK', 'Information') | Out-Null
+    } else {
+        $Global:LastGfxInfo = "Apply fehlgeschlagen ($ts) - siehe Logs (Settings-Tab)."
+        [System.Windows.MessageBox]::Show(
+            "Anwenden fehlgeschlagen.`n`nHaeufigste Ursachen:`n  - PUBG laeuft noch (erst komplett beenden)`n  - GameUserSettings.ini fehlt (PUBG einmal starten und beenden)`n`nDetails: Logs im Settings-Tab.",
+            'Grafik', 'OK', 'Warning') | Out-Null
+    }
+    Update-GraphicsTab
+})
+
+$ctrls.btnGfxRevert.Add_Click({
+    $tw = $Global:EsportGfxTweak
+    if (-not $tw) { return }
+    if (-not (Test-TweakRevertable -Tweak $tw)) {
+        [System.Windows.MessageBox]::Show('Kein Backup vorhanden - es wurde noch nichts angewendet.', 'Grafik', 'OK', 'Information') | Out-Null
+        return
+    }
+    $confirm = [System.Windows.MessageBox]::Show(
+        "GameUserSettings.ini wird aus dem letzten Backup wiederhergestellt.`n`n" +
+        "PUBG muss dabei geschlossen sein.`n`nFortfahren?",
+        'Grafik-Profil zuruecksetzen', 'YesNo', 'Question')
+    if ($confirm -ne 'Yes') { return }
+    $ts = Get-Date -Format 'HH:mm:ss'
+    if (Invoke-TweakRevert -Tweak $tw) {
+        $Global:LastGfxInfo = "Auf Backup zurueckgesetzt ($ts)."
+        [System.Windows.MessageBox]::Show('GameUserSettings.ini aus Backup wiederhergestellt.', 'Grafik', 'OK', 'Information') | Out-Null
+    } else {
+        $Global:LastGfxInfo = "Zuruecksetzen fehlgeschlagen ($ts) - siehe Logs (Settings-Tab)."
+        [System.Windows.MessageBox]::Show('Zuruecksetzen fehlgeschlagen. Details: Logs im Settings-Tab.', 'Grafik', 'OK', 'Warning') | Out-Null
+    }
+    Update-GraphicsTab
+})
+
 # ==================== CAPTURE TAB ====================
 $Global:CaptureState = @{
     IsRunning = $false
@@ -3910,6 +4075,7 @@ try {
 # Initial Status
 Update-StatusGrid
 Update-TweaksTab
+Update-GraphicsTab
 
 # Cleanup beim Schliessen - Timer stoppen, ggf. laufenden PresentMon killen
 $window.Add_Closing({
