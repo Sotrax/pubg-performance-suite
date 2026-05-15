@@ -83,7 +83,7 @@ Each tweak has a **Revert** function unless noted. Backups for file-based tweaks
   - Antialiasing Mode = Application Controlled
 - **Stamp**: `%LOCALAPPDATA%\PUBGDiag\npi-applied.stamp` — 60-day cache before re-apply prompt
 - **Impact**: KEIN
-- **Reversible**: ⚠ — currently no automated revert; manually via NPI GUI → "Restore profile defaults"
+- **Reversible**: ✓ — Revert runs NPI `-deleteProfileSetting` for all 8 setting IDs, so the PUBG profile drops the custom values and inherits the driver defaults again. Needs NPI present (it is, after Apply); without it the suite shows a manual-restore hint.
 
 ### 10. PUBG Esport-Grafik (Competitive-Profil)
 - **What**: Writes PUBG's in-game graphics menu to the "Balanced Visibility" competitive profile
@@ -151,6 +151,23 @@ Each tweak has a **Revert** function unless noted. Backups for file-based tweaks
 - **Adapter**: First Up + non-Virtual adapter
 - **Impact**: KEIN — actually improves UDP gaming latency (PUBG uses UDP). LSO/RSC bundle packets, useless for game traffic.
 - **Reversible**: ✓ (restores pre-Apply enabled state per protocol)
+
+## Audio — why there is no audio *tweak*
+
+Competitive audio gains (spatial sound off, communications ducking off, in-game
+HRTF on) are real, but they have **no cleanly scriptable, documented surface**:
+
+- **Spatial sound** (Windows Sonic / Dolby Atmos) is stored per audio endpoint
+  in the device property store — reliably writing it means resolving the
+  default render device GUID.
+- **Communications ducking** has no Microsoft-documented registry value at all;
+  Microsoft only documents the `Mmsys.cpl` Communications tab and a per-app
+  WASAPI API (`IAudioSessionControl2::SetDuckingPreference`).
+
+Auto-applying undocumented/per-device registry values would contradict this
+suite's rule (every tweak names its exact keys). Therefore audio is handled as
+**`MANUELL` findings in the diagnose** (section "Audio") — the report tells the
+user the exact clicks, the suite does not write anything.
 
 ## What's intentionally NOT included (BattlEye-Risk)
 

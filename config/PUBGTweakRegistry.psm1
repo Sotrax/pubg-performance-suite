@@ -51,6 +51,21 @@ $script:RegLogDir     = Join-Path $script:RegLocalAppData 'PUBGSuite\logs'
 $script:NpiStampPath  = Join-Path $script:RegLocalAppData 'PUBGDiag\npi-applied.stamp'
 $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 
+# NVIDIA PUBG-Profil: Profilname + die 8 Treiber-Settings. Modul-Scope, damit
+# Apply (Invoke-NPIPubgProfile) und Revert (Revert-NPIPubgProfile) GENAU dieselbe
+# Liste nutzen - eine einzige Quelle fuer Setzen und Zuruecksetzen.
+$script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
+$script:NpiPubgSettings = @(
+    @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
+    @{ Id='0x00A879CF'; Val='0x00000000'; Desc='Vertical Sync = Force OFF' }
+    @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
+    @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
+    @{ Id='0x10835000'; Val='0x00000002'; Desc='Low Latency Mode = Ultra' }
+    @{ Id='0x10835013'; Val='0x000000ED'; Desc='Frame Rate Limiter v3 = 237 FPS' }
+    @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
+    @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
+)
+
 # ===========================================================================
 #  PRIVATE HELFER
 # ===========================================================================
@@ -277,21 +292,10 @@ function Install-NPIFromGitHub {
 function Invoke-NPIPubgProfile {
     param([string]$NpiPath)
     if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
-    $profileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
-    $settings = @(
-        @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
-        @{ Id='0x00A879CF'; Val='0x00000000'; Desc='Vertical Sync = Force OFF' }
-        @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
-        @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
-        @{ Id='0x10835000'; Val='0x00000002'; Desc='Low Latency Mode = Ultra' }
-        @{ Id='0x10835013'; Val='0x000000ED'; Desc='Frame Rate Limiter v3 = 237 FPS' }
-        @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
-        @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
-    )
     $ok = 0; $fail = 0
-    foreach ($s in $settings) {
+    foreach ($s in $script:NpiPubgSettings) {
         try {
-            $null = & $NpiPath '-setProfileSetting' $profileName $s.Id $s.Val 2>&1
+            $null = & $NpiPath '-setProfileSetting' $script:NpiPubgProfileName $s.Id $s.Val 2>&1
             if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
         } catch { $fail++ }
     }
@@ -301,6 +305,29 @@ function Invoke-NPIPubgProfile {
         Get-Date | Out-File $script:NpiStampPath -Force
     } catch {}
     Write-RegLog "NPI Apply: $ok ok, $fail fail"
+    return ($ok -gt 0 -and $fail -eq 0)
+}
+
+function Revert-NPIPubgProfile {
+    # Setzt die 8 vom Apply gesetzten Profil-Werte zurueck. NPI hat keinen
+    # "alten Wert" gespeichert - der definierte Vorzustand ist "kein Custom-
+    # Setting im Profil" -> '-deleteProfileSetting' entfernt den Eintrag, das
+    # Profil erbt danach wieder den globalen Treiber-Default. Das entspricht
+    # exakt dem, was die manuelle Anleitung bisher empfahl ("Restore defaults").
+    param([string]$NpiPath)
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
+    $ok = 0; $fail = 0
+    foreach ($s in $script:NpiPubgSettings) {
+        try {
+            $null = & $NpiPath '-deleteProfileSetting' $script:NpiPubgProfileName $s.Id 2>&1
+            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
+        } catch { $fail++ }
+    }
+    # Stamp entfernen, damit der Check wieder 'nicht angewandt' meldet.
+    if (Test-Path $script:NpiStampPath) {
+        Remove-Item $script:NpiStampPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-RegLog "NPI Revert: $ok deleteProfileSetting ok, $fail fail"
     return ($ok -gt 0 -and $fail -eq 0)
 }
 
@@ -1028,7 +1055,8 @@ $script:PUBGTweaks = @(
             'Threaded Optimization = ON',
             'Low Latency Mode = Ultra (Reflex-equivalent)',
             'Frame Rate Limiter v3 = 237 FPS',
-            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp'
+            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp',
+            'Revert: entfernt die 8 Profil-Werte wieder (NPI -deleteProfileSetting -> Treiber-Default)'
         )
         Check={
             if (Test-Path $script:NpiStampPath) {
@@ -1050,7 +1078,11 @@ $script:PUBGTweaks = @(
                 }
                 $result = Invoke-NPIPubgProfile -NpiPath $npi
                 if (Test-Path $script:NpiStampPath) {
-                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt'; Snapshot=$null }
+                    # Snapshot muss != $null sein, sonst blendet die Suite den Revert-Button aus.
+                    # Der Revert leitet alles aus $script:NpiPubgSettings ab; der Snapshot dient
+                    # nur als History-Marker.
+                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt'
+                       Snapshot=@{ Method='npi-deleteProfileSetting'; SettingCount=$script:NpiPubgSettings.Count; AppliedAt=(Get-Date).ToString('o') } }
                 } else {
                     @{ Success=$false; Message='NPI-Profil nicht bestaetigt (kein Stamp)'; Snapshot=$null }
                 }
@@ -1058,8 +1090,17 @@ $script:PUBGTweaks = @(
         }
         Revert={
             param($Snapshot)
-            # NVIDIA-Profil ist nicht reversibel (kein definierter Vorzustand der Treiberwerte)
-            @{ Success=$false; Message='NVIDIA-Profil ist nicht automatisch reversibel - via NVIDIA Systemsteuerung "Wiederherstellen"' }
+            # Entfernt die 8 gesetzten Profil-Settings -> Profil erbt wieder die
+            # globalen Treiber-Defaults. Braucht NPI; ohne NPI -> manueller Hinweis.
+            $npi = Get-NPIPath
+            if (-not $npi) {
+                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - die 8 Profil-Werte manuell via NVIDIA-Systemsteuerung "Wiederherstellen" zuruecksetzen' }
+            }
+            if (Revert-NPIPubgProfile -NpiPath $npi) {
+                @{ Success=$true; Message='NVIDIA PUBG-Profil zurueckgesetzt (8 Werte auf Treiber-Default)' }
+            } else {
+                @{ Success=$false; Message='NPI-Revert teilweise fehlgeschlagen - ggf. via NVIDIA-Systemsteuerung "Wiederherstellen"' }
+            }
         }
     }
 )

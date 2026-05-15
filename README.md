@@ -2,7 +2,7 @@
 
 > Windows-native PowerShell-WPF Tool zum Diagnostizieren und Tunen von PUBG fuer Competitive-Play. BattlEye-safe, vollstaendig reversibel, keine externen Dependencies ausser auto-installierten Open-Source-Helpern.
 
-![Version](https://img.shields.io/badge/version-0.12.0--beta-blue)
+![Version](https://img.shields.io/badge/version-0.15.0--beta-blue)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-blue)
 ![BattlEye](https://img.shields.io/badge/BattlEye-safe-brightgreen)
@@ -13,7 +13,7 @@
 Drei Dinge sollten dir klar sein **bevor** du etwas applist:
 
 1. **Open Source**. Jede Zeile ist lesbar in `PUBG-Suite.ps1`. Jeder Tweak listet die exakten Registry-Keys / File-Pfade die geaendert werden (Klick auf "Was wird veraendert? (Details anzeigen)" pro Tweak).
-2. **Vollstaendig reversibel**. Vor jedem Apply wird ein Snapshot der alten Werte in `history.json` gespeichert. 14 von 15 Tweaks haben einen 1-Klick-Revert-Button. File-Tweaks (Engine.ini, GameUserSettings.ini) werden vorher in `%LOCALAPPDATA%\PUBGSuite\backups\` als `.bak_<timestamp>` gesichert.
+2. **Vollstaendig reversibel**. Vor jedem Apply wird ein Snapshot der alten Werte in `history.json` gespeichert. Alle 15 Tweaks haben einen 1-Klick-Revert-Button. File-Tweaks (Engine.ini, GameUserSettings.ini) werden vorher in `%LOCALAPPDATA%\PUBGSuite\backups\` als `.bak_<timestamp>` gesichert.
 3. **BattlEye-safe by design**. Bewusst ausgeschlossen (siehe [Safety](#safety)): Special K, ReShade, DXVK, ban-bait Engine.ini CVars, Process-Lasso auf BEService.exe. Jeder Tweak veraendert entweder Windows-OS-Settings, User-AppData oder User-controllable PUBG-Settings - **keiner haengt sich an den TslGame.exe-Prozess**.
 
 **Was die Suite NICHT tut:** Keine Telemetrie, keine Cloud-Calls, keine "Phone home"-Logik. Internet-Traffic nur:

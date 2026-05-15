@@ -15,6 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.15.0-beta] - 2026-05-16
+### Added
+- **Diagnose: Audio-Hinweise.** Neuer Report-Abschnitt „Audio" mit `MANUELL`-
+  Befunden für die esports-relevanten Windows-Audio-Einstellungen: räumlichen
+  Sound (Windows Sonic / Dolby Atmos) aus, Kommunikations-Ducking auf „Nichts
+  unternehmen", In-Game-HRTF an. Bewusst **Hinweise statt Apply-Tweak** — diese
+  Settings haben keine sauber dokumentierte/skriptbare Oberfläche (Spatial
+  Sound liegt pro Audiogerät im Property-Store, fürs Ducking gibt es keinen von
+  Microsoft dokumentierten Registry-Wert).
+
+### Changed
+- **`nvprofile` ist jetzt reversibel.** Der Revert entfernt die 8 gesetzten
+  NVIDIA-Profil-Werte via NPI `-deleteProfileSetting`; das PUBG-Profil erbt
+  danach wieder die globalen Treiber-Defaults. Apply liefert dafür einen
+  History-Snapshot, damit die Suite den Revert-Button einblendet. Die 8
+  Settings + Profilname liegen jetzt auf Modul-Scope (`$script:NpiPubgSettings`)
+  — eine Quelle für Setzen und Zurücksetzen. Damit haben **alle 15 Tweaks**
+  einen 1-Klick-Revert (vorher 14, `nvprofile` ausgenommen).
+
 ## [0.14.0-beta] - 2026-05-15
 ### Changed — Single Source of Truth: geteiltes Profil + Tweak-Registry
 

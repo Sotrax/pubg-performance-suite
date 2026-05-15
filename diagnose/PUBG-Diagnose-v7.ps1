@@ -654,7 +654,22 @@ if (-not $Global:PUBGProfile) {
 }
 
 
-# ==================== 8. NETZWERK - EU MIT JITTER ====================
+# ==================== 8. AUDIO - ESPORTS-HINWEISE (manuell) =================
+# Diese Audio-Settings haben competitiven Mehrwert, aber KEINE sauber
+# dokumentierte/skriptbare Oberflaeche: raeumlicher Sound liegt pro Audiogeraet
+# im Property-Store, fuer das Kommunikations-Ducking gibt es keinen offiziell
+# dokumentierten Registry-Wert (Microsoft nennt nur den Communications-Tab und
+# eine Per-App-API). Daher reine MANUELL-Hinweise statt eines Apply-Tweaks.
+Write-Status 'Audio-Hinweise...' 'INFO'
+Add-Finding 'Audio' 'Raeumlicher Sound (Windows Sonic / Dolby Atmos)' 'manuell pruefen' 'MANUELL' `
+    'Auf AUS stellen: Rechtsklick aufs Lautsprecher-Icon in der Taskleiste -> "Raeumlicher Sound" -> Aus. Windows-3D-Audio konkurriert mit PUBGs eigenem HRTF - doppelte Verarbeitung verschlechtert die Richtungsortung von Schritten und Schuessen.'
+Add-Finding 'Audio' 'Kommunikations-Ducking (Stream Attenuation)' 'manuell pruefen' 'MANUELL' `
+    'Auf "Nichts unternehmen" stellen: Sound-Systemsteuerung (Win+R -> mmsys.cpl) -> Tab "Kommunikation". Sonst regelt Windows die Spiel-/Schritt-Lautstaerke leiser, sobald Voice-Chat (Discord/TS/In-Game) aktiv ist.'
+Add-Finding 'Audio' 'PUBG In-Game: HRTF' 'manuell pruefen' 'MANUELL' `
+    'Im Spiel unter Einstellungen -> Sound: HRTF aktivieren - liefert die 3D-Ortung fuer Schritte und Schuesse, fuer Competitive Pflicht.'
+
+
+# ==================== 9. NETZWERK - EU MIT JITTER ====================
 if ($IncludePingTest) {
     Write-Status "EU-Ping/Jitter ($PingCount Pings)..." 'INFO'
     $pingTargets = [ordered]@{
@@ -760,7 +775,7 @@ $cIss = Get-StatusCount 'ISSUE'
 $cMan = Get-StatusCount 'MANUELL'
 $cSkp = Get-StatusCount 'SKIP'
 
-$sectionOrder = @('Monitor (Primary)','GPU (dediziert)','CPU/RAM','Speicher','Windows','PUBG Settings','Netzwerk (EU)')
+$sectionOrder = @('Monitor (Primary)','GPU (dediziert)','CPU/RAM','Speicher','Windows','PUBG Settings','Audio','Netzwerk (EU)')
 $grouped = $Global:Findings | Group-Object -Property { $_.Section }
 $sectionsHtml = foreach ($name in $sectionOrder) {
     $s = $grouped | Where-Object { $_.Name -eq $name }
