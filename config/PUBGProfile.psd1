@@ -15,7 +15,7 @@
 #
 #  NICHT im Profil (bewusst): ResolutionSizeX/Y und FrameRateLimit. Beide sind
 #  monitor-/hardwarespezifisch und werden separat behandelt (die Diagnose listet
-#  sie nur als INVENTAR, ohne Bewertung).
+#  sie nur als SYSINFO, ohne Bewertung).
 #
 #  Aenderungen an Werten sind User-Master-Entscheidungen - nicht automatisch
 #  anpassen. Bei jeder Wertaenderung die ProfileVersion erhoehen.

@@ -109,7 +109,7 @@ Passive ETW-basierte Capture (kein DLL-Hook, kein Overlay) zeigt:
 
 ### Diagnose
 
-Startet die v7-Diagnose im Report-Only-Modus, generiert einen HTML-Report mit den Status-Kategorien INVENTAR / OK / TWEAK / ISSUE / MANUELL / SKIP. Geprueft wird gegen die geteilte Konfiguration (`config/PUBGProfile.psd1` + `config/PUBGTweakRegistry.psm1`); Fixes laufen ueber den Tweaks- und Grafik-Tab.
+Startet die v7-Diagnose im Report-Only-Modus, generiert einen HTML-Report mit den Status-Kategorien SYSINFO / OK / TWEAK / ISSUE / MANUELL / SKIP. Geprueft wird gegen die geteilte Konfiguration (`config/PUBGProfile.psd1` + `config/PUBGTweakRegistry.psm1`); Fixes laufen ueber den Tweaks- und Grafik-Tab.
 
 ## Safety
 

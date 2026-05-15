@@ -11,7 +11,7 @@
     - Single Source of Truth: Grafik-Soll-Werte kommen aus config\PUBGProfile.psd1,
       System-Tweak-Checks aus config\PUBGTweakRegistry.psm1. Kein Hardcoding mehr.
     - Neue, mechanisch definierte Status-Kategorien:
-        INVENTAR  reine Identifikation / Live-Messung, nicht bewertet
+        SYSINFO   reine Identifikation / Live-Messung, nicht bewertet
         OK        gegen Soll geprueft, passt
         TWEAK     Verbesserung via Suite moeglich, nicht kritisch
         ISSUE     muss adressiert werden (Suite kann es fixen)
@@ -60,8 +60,8 @@ function Add-Finding {
         [string]$Section,
         [string]$Item,
         [string]$Value,
-        [ValidateSet('INVENTAR','OK','TWEAK','ISSUE','MANUELL','SKIP')]
-        [string]$Status = 'INVENTAR',
+        [ValidateSet('SYSINFO','OK','TWEAK','ISSUE','MANUELL','SKIP')]
+        [string]$Status = 'SYSINFO',
         [string]$Recommendation = '',
         [string]$Impact = '',
         [string]$ImpactDetail = ''
@@ -189,7 +189,7 @@ if ($primaryCtrl) {
         Add-Finding 'Monitor (Primary)' 'Aktive Refreshrate' "$activeHz Hz" 'MANUELL' `
             'Fuer Competitive PUBG mind. 144 Hz - in den Windows-Anzeige-Einstellungen pruefen/umstellen'
     }
-    Add-Finding 'Monitor (Primary)' 'Aktive Aufloesung' $activeRes 'INVENTAR'
+    Add-Finding 'Monitor (Primary)' 'Aktive Aufloesung' $activeRes 'SYSINFO'
 }
 
 # Multi-Monitor: aktive Displays via Screen.AllScreens (zeigt nur vom DWM real
@@ -215,7 +215,7 @@ try {
     if ($activeMonitor) {
         $manu  = ($activeMonitor.ManufacturerName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
         $model = ($activeMonitor.UserFriendlyName  | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
-        Add-Finding 'Monitor (Primary)' 'Modell (EDID)' "$manu $model" 'INVENTAR'
+        Add-Finding 'Monitor (Primary)' 'Modell (EDID)' "$manu $model" 'SYSINFO'
     }
     $supportedModes = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction Stop
     $allHz = $supportedModes.MonitorSourceModes | ForEach-Object { $_.VerticalRefreshRate }
@@ -245,7 +245,7 @@ if (-not $dGpu) {
 }
 
 if ($dGpu) {
-    Add-Finding 'GPU (dediziert)' 'Modell' $dGpu.Name 'INVENTAR'
+    Add-Finding 'GPU (dediziert)' 'Modell' $dGpu.Name 'SYSINFO'
 
     $vramInfo = Get-PUBGGpuVRAM -gpuObj $dGpu
     if ($vramInfo) {
@@ -258,8 +258,8 @@ if ($dGpu) {
         }
     }
 
-    Add-Finding 'GPU (dediziert)' 'Treiber-Version' "$($dGpu.DriverVersion)" 'INVENTAR'
-    Add-Finding 'GPU (dediziert)' 'Treiber-Datum' "$($dGpu.DriverDate)" 'INVENTAR'
+    Add-Finding 'GPU (dediziert)' 'Treiber-Version' "$($dGpu.DriverVersion)" 'SYSINFO'
+    Add-Finding 'GPU (dediziert)' 'Treiber-Datum' "$($dGpu.DriverDate)" 'SYSINFO'
     if ($dGpu.DriverDate) {
         $ageDays = (New-TimeSpan -Start $dGpu.DriverDate -End (Get-Date)).Days
         if ($ageDays -lt 90) {
@@ -276,7 +276,7 @@ if ($dGpu) {
             $msi = Get-ItemProperty -Path $msiPath -Name 'MSISupported' -ErrorAction SilentlyContinue
             if ($null -ne $msi.MSISupported) {
                 $msiVal = if ($msi.MSISupported -eq 1) {'AN (MSI)'} else {'AUS (Line-Based)'}
-                Add-Finding 'GPU (dediziert)' 'MSI Mode (IRQ)' $msiVal 'INVENTAR'
+                Add-Finding 'GPU (dediziert)' 'MSI Mode (IRQ)' $msiVal 'SYSINFO'
             }
         }
     }
@@ -289,13 +289,13 @@ if ($dGpu) {
                 $nvParts = ($nvOutput -split ',') | ForEach-Object { $_.Trim() }
                 $gpuTemp = [int]$nvParts[0]
                 if ($gpuTemp -lt 75) {
-                    Add-Finding 'GPU (dediziert)' 'GPU-Temperatur (live)' "$gpuTemp C" 'INVENTAR'
+                    Add-Finding 'GPU (dediziert)' 'GPU-Temperatur (live)' "$gpuTemp C" 'SYSINFO'
                 } else {
                     Add-Finding 'GPU (dediziert)' 'GPU-Temperatur (live)' "$gpuTemp C" 'MANUELL' `
                         'GPU laeuft warm - Gehaeuse-Airflow / Luefterkurve / Staub pruefen'
                 }
-                Add-Finding 'GPU (dediziert)' 'GPU-Auslastung (live)' "$($nvParts[1]) %" 'INVENTAR'
-                Add-Finding 'GPU (dediziert)' 'VRAM-Belegung (live)' "$($nvParts[2]) / $($nvParts[3]) MB" 'INVENTAR'
+                Add-Finding 'GPU (dediziert)' 'GPU-Auslastung (live)' "$($nvParts[1]) %" 'SYSINFO'
+                Add-Finding 'GPU (dediziert)' 'VRAM-Belegung (live)' "$($nvParts[2]) / $($nvParts[3]) MB" 'SYSINFO'
             }
         } catch {
             Add-Finding 'GPU (dediziert)' 'nvidia-smi' 'Fehler beim Auslesen' 'SKIP'
@@ -310,7 +310,7 @@ if ($dGpu) {
 # ==================== 3. CPU & RAM ====================
 Write-Status 'CPU/RAM-Informationen werden ausgelesen...' 'INFO'
 $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
-Add-Finding 'CPU/RAM' 'CPU-Modell' "$($cpu.Name)" 'INVENTAR'
+Add-Finding 'CPU/RAM' 'CPU-Modell' "$($cpu.Name)" 'SYSINFO'
 $isX3D = ($cpu.Name -match 'X3D')
 
 $cores   = $cpu.NumberOfCores
@@ -351,12 +351,12 @@ if ($totalRAM -ge 16) {
 $ramSticks = $ram.Count
 if ($ramSticks -gt 0) {
     $ramFirst = $ram[0]
-    Add-Finding 'CPU/RAM' 'RAM-Module' "$ramSticks DIMM(s)" 'INVENTAR'
+    Add-Finding 'CPU/RAM' 'RAM-Module' "$ramSticks DIMM(s)" 'SYSINFO'
     $memType = $ramFirst.SMBIOSMemoryType
     $memTypeText = switch ($memType) {
         20 {'DDR'} 21 {'DDR2'} 24 {'DDR3'} 26 {'DDR4'} 34 {'DDR5'} 35 {'DDR5'} default {"Type-$memType"}
     }
-    Add-Finding 'CPU/RAM' 'RAM-Typ' $memTypeText 'INVENTAR'
+    Add-Finding 'CPU/RAM' 'RAM-Typ' $memTypeText 'SYSINFO'
 
     if ($ramSticks -eq 4 -and ($memType -eq 34 -or $memType -eq 35)) {
         Add-Finding 'CPU/RAM' 'RAM-Layout 4-DIMM DDR5' '4 Module bestueckt' 'MANUELL' `
@@ -397,7 +397,7 @@ if (-not $steamPath) { $steamPath = (Get-ItemProperty 'HKLM:\Software\Valve\Stea
 
 $pubgInstallPath = $null
 if ($steamPath -and (Test-Path $steamPath)) {
-    Add-Finding 'Speicher' 'Steam-Installation' $steamPath 'INVENTAR'
+    Add-Finding 'Speicher' 'Steam-Installation' $steamPath 'SYSINFO'
     $libFile = Join-Path $steamPath 'steamapps\libraryfolders.vdf'
     if (Test-Path $libFile) {
         $libContent = Get-Content $libFile -Raw
@@ -416,14 +416,14 @@ if ($steamPath -and (Test-Path $steamPath)) {
 }
 
 if ($pubgInstallPath -and (Test-Path $pubgInstallPath)) {
-    Add-Finding 'Speicher' 'PUBG-Installationspfad' $pubgInstallPath 'INVENTAR'
+    Add-Finding 'Speicher' 'PUBG-Installationspfad' $pubgInstallPath 'SYSINFO'
     try {
         $driveLetter = (Get-Item $pubgInstallPath).PSDrive.Name
         $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop
         $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
         $physDisk = Get-PhysicalDisk -DeviceNumber $partition.DiskNumber -ErrorAction Stop
 
-        Add-Finding 'Speicher' 'Datentraeger Modell' "$($physDisk.FriendlyName)" 'INVENTAR'
+        Add-Finding 'Speicher' 'Datentraeger Modell' "$($physDisk.FriendlyName)" 'SYSINFO'
 
         if ($disk.BusType -eq 'NVMe') {
             Add-Finding 'Speicher' 'PUBG Drive Bus' "$($disk.BusType)" 'OK'
@@ -436,7 +436,7 @@ if ($pubgInstallPath -and (Test-Path $pubgInstallPath)) {
         } elseif ($physDisk.MediaType -eq 'HDD') {
             Add-Finding 'Speicher' 'PUBG Drive Typ' 'HDD' 'MANUELL' 'PUBG von einer SSD installieren - HDD verursacht Streaming-Stutter'
         } else {
-            Add-Finding 'Speicher' 'PUBG Drive Typ' "$($physDisk.MediaType)" 'INVENTAR'
+            Add-Finding 'Speicher' 'PUBG Drive Typ' "$($physDisk.MediaType)" 'SYSINFO'
         }
 
         $vol = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
@@ -459,12 +459,12 @@ if ($pubgInstallPath -and (Test-Path $pubgInstallPath)) {
 }
 
 
-# ==================== 5. WINDOWS - HARDWARE/OS-INVENTAR + MANUELLE CHECKS =====
+# ==================== 5. WINDOWS - HARDWARE/OS-SYSTEM-INFO + MANUELLE CHECKS =
 Write-Status 'Windows Gaming-Settings werden geprueft...' 'INFO'
 $os = Get-CimInstance Win32_OperatingSystem
 $winDisplayVer = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue).DisplayVersion
 $ubr = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue).UBR
-Add-Finding 'Windows' 'Windows Version' "$($os.Caption) $winDisplayVer (Build $($os.BuildNumber).$ubr)" 'INVENTAR'
+Add-Finding 'Windows' 'Windows Version' "$($os.Caption) $winDisplayVer (Build $($os.BuildNumber).$ubr)" 'SYSINFO'
 
 # Reboot-Pending
 $rebootReasons = @()
@@ -606,14 +606,14 @@ if (-not $Global:PUBGProfile) {
     $resX = Get-IniValue 'ResolutionSizeX' $content
     $resY = Get-IniValue 'ResolutionSizeY' $content
     if ($resX -and $resY) {
-        # Aufloesung ist monitorabhaengig -> reines Inventar, nicht bewertet
-        Add-Finding 'PUBG Settings' 'Aufloesung (ResolutionSize)' "$resX x $resY" 'INVENTAR'
+        # Aufloesung ist monitorabhaengig -> reine System-Info, nicht bewertet
+        Add-Finding 'PUBG Settings' 'Aufloesung (ResolutionSize)' "$resX x $resY" 'SYSINFO'
     }
     $fps = Get-IniValue 'FrameRateLimit' $content
     if ($fps) {
         $fpsVal = [int]([math]::Floor([double]$fps))
-        # FPS-Limit gehoert dem fpscap-Tweak (Registry) - hier nur als Inventar zeigen
-        Add-Finding 'PUBG Settings' 'FPS-Limit (Ist-Wert)' "$fpsVal FPS" 'INVENTAR'
+        # FPS-Limit gehoert dem fpscap-Tweak (Registry) - hier nur als System-Info zeigen
+        Add-Finding 'PUBG Settings' 'FPS-Limit (Ist-Wert)' "$fpsVal FPS" 'SYSINFO'
     }
 
     foreach ($section in $Global:PUBGProfile.Keys) {
@@ -649,7 +649,7 @@ if (-not $Global:PUBGProfile) {
 
     $eng = Join-Path $pubgConfigPath 'Engine.ini'
     if (Test-Path $eng) {
-        Add-Finding 'PUBG Settings' 'Engine.ini' "vorhanden ($((Get-Item $eng).Length) Bytes)" 'INVENTAR'
+        Add-Finding 'PUBG Settings' 'Engine.ini' "vorhanden ($((Get-Item $eng).Length) Bytes)" 'SYSINFO'
     }
 }
 
@@ -673,9 +673,9 @@ if ($IncludePingTest) {
                 $max = ($times | Measure-Object -Maximum).Maximum
                 $variance = ($times | ForEach-Object { [math]::Pow($_ - $avg, 2) } | Measure-Object -Sum).Sum / $times.Count
                 $stddev = [math]::Round([math]::Sqrt($variance), 1)
-                # Ping/Jitter sind Live-Messungen (ISP/Distanz-abhaengig) -> Inventar
-                Add-Finding 'Netzwerk (EU)' "Ping $region (avg)" "$avg ms" 'INVENTAR'
-                Add-Finding 'Netzwerk (EU)' "Jitter $region" "stddev=$stddev ms (min=$min, max=$max)" 'INVENTAR'
+                # Ping/Jitter sind Live-Messungen (ISP/Distanz-abhaengig) -> System-Info
+                Add-Finding 'Netzwerk (EU)' "Ping $region (avg)" "$avg ms" 'SYSINFO'
+                Add-Finding 'Netzwerk (EU)' "Jitter $region" "stddev=$stddev ms (min=$min, max=$max)" 'SYSINFO'
             }
         } catch {
             Add-Finding 'Netzwerk (EU)' "Ping $region" 'nicht erreichbar' 'SKIP'
@@ -693,7 +693,7 @@ if ($IncludePingTest) {
     if (-not $netAdapter) { $netAdapter = $candidates | Select-Object -First 1 }
 
     if ($netAdapter) {
-        Add-Finding 'Netzwerk (EU)' 'Aktiver Adapter' "$($netAdapter.InterfaceDescription)" 'INVENTAR'
+        Add-Finding 'Netzwerk (EU)' 'Aktiver Adapter' "$($netAdapter.InterfaceDescription)" 'SYSINFO'
         $isWlan = ($netAdapter.PhysicalMediaType -match '802\.11|Wireless' -or $netAdapter.InterfaceDescription -match 'Wi-Fi|Wireless|WLAN')
         if ($isWlan) {
             Add-Finding 'Netzwerk (EU)' 'Verbindungstyp' 'WLAN' 'MANUELL' `
@@ -701,7 +701,7 @@ if ($IncludePingTest) {
         } else {
             Add-Finding 'Netzwerk (EU)' 'Verbindungstyp' 'LAN' 'OK'
         }
-        Add-Finding 'Netzwerk (EU)' 'Link-Speed' "$($netAdapter.LinkSpeed)" 'INVENTAR'
+        Add-Finding 'Netzwerk (EU)' 'Link-Speed' "$($netAdapter.LinkSpeed)" 'SYSINFO'
 
         try {
             $rssStatus = Get-NetAdapterRss -Name $netAdapter.Name -ErrorAction SilentlyContinue
@@ -725,9 +725,9 @@ if ($IncludePingTest) {
             }
             $ipCfg = Get-NetIPInterface -InterfaceIndex $netAdapter.IfIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
             if ($ipCfg) {
-                # MTU rein als Inventar - 1500 ist fuer Kabel/Glasfaser korrekt, der
+                # MTU rein als System-Info - 1500 ist fuer Kabel/Glasfaser korrekt, der
                 # PPPoE-Adapter setzt 1492 ohnehin automatisch. Kein Tweak noetig.
-                Add-Finding 'Netzwerk (EU)' 'MTU (Ethernet)' "$($ipCfg.NlMtu)" 'INVENTAR'
+                Add-Finding 'Netzwerk (EU)' 'MTU (Ethernet)' "$($ipCfg.NlMtu)" 'SYSINFO'
             }
         } catch {
             Add-Finding 'Netzwerk (EU)' 'NIC-Eigenschaften' 'Auslese-Fehler (Admin?)' 'SKIP'
@@ -739,9 +739,9 @@ if ($IncludePingTest) {
 # ==================== HTML-REPORT ====================
 Write-Status 'HTML-Report wird gebaut...' 'INFO'
 
-# Status -> Darstellung. INVENTAR/SKIP dezent, Bewertungen kraeftig.
+# Status -> Darstellung. SYSINFO/SKIP dezent, Bewertungen kraeftig.
 $statusStyle = @{
-    'INVENTAR' = @{ Color='#6b7280'; Weight='normal'; Style='normal'; Bg='' }
+    'SYSINFO' = @{ Color='#6b7280'; Weight='normal'; Style='normal'; Bg='' }
     'OK'       = @{ Color='#4ade80'; Weight='normal'; Style='normal'; Bg='' }
     'TWEAK'    = @{ Color='#fbbf24'; Weight='bold';   Style='normal'; Bg='' }
     'ISSUE'    = @{ Color='#f87171'; Weight='bold';   Style='normal'; Bg='background:rgba(248,113,113,0.08);' }
@@ -749,11 +749,11 @@ $statusStyle = @{
     'SKIP'     = @{ Color='#9ca3af'; Weight='normal'; Style='italic'; Bg='' }
 }
 $statusIcon = @{
-    'INVENTAR'='[i]'; 'OK'='[OK]'; 'TWEAK'='[~]'; 'ISSUE'='[!]'; 'MANUELL'='[M]'; 'SKIP'='[-]'
+    'SYSINFO'='[i]'; 'OK'='[OK]'; 'TWEAK'='[~]'; 'ISSUE'='[!]'; 'MANUELL'='[M]'; 'SKIP'='[-]'
 }
 
 function Get-StatusCount { param([string]$S) @($Global:Findings | Where-Object { $_.Status -eq $S }).Count }
-$cInv = Get-StatusCount 'INVENTAR'
+$cInv = Get-StatusCount 'SYSINFO'
 $cOk  = Get-StatusCount 'OK'
 $cTwk = Get-StatusCount 'TWEAK'
 $cIss = Get-StatusCount 'ISSUE'
@@ -766,8 +766,8 @@ $sectionsHtml = foreach ($name in $sectionOrder) {
     $s = $grouped | Where-Object { $_.Name -eq $name }
     if (-not $s) { continue }
     $rows = foreach ($f in $s.Group) {
-        $sty = $statusStyle[$f.Status]; if (-not $sty) { $sty = $statusStyle['INVENTAR'] }
-        $rowClass = if ($f.Status -eq 'INVENTAR') { ' class="inv"' } else { '' }
+        $sty = $statusStyle[$f.Status]; if (-not $sty) { $sty = $statusStyle['SYSINFO'] }
+        $rowClass = if ($f.Status -eq 'SYSINFO') { ' class="inv"' } else { '' }
         $showExtras = $f.Status -in 'TWEAK','ISSUE','MANUELL'
         $reco = if ($f.Recommendation -and $showExtras) { "<div class='reco'>&rarr; $($f.Recommendation)</div>" } else { '' }
         $impact = ''
@@ -818,7 +818,7 @@ $html = @"
     .summary-card.skip    { border-left-color: #9ca3af; }
     .summary-card .count { font-size: 1.5rem; font-weight: bold; }
     .summary-card .label { font-size: 0.85rem; color: #9ca3af; }
-    /* Inventar-Karte bewusst dezenter als die Bewertungs-Karten */
+    /* System-Info-Karte bewusst dezenter als die Bewertungs-Karten */
     .summary-card.inv { background: #15171c; padding: 0.7rem 1rem; border-left-color: #6b7280; min-width: 90px; align-self: center; }
     .summary-card.inv .count { font-size: 1.1rem; color: #6b7280; }
     .summary-card.inv .label { font-size: 0.75rem; }
@@ -830,7 +830,7 @@ $html = @"
     td.item { color: #d1d5db; width: 32%; }
     td.value { color: #e5e7eb; }
     td.status { width: 110px; text-align: center; white-space: nowrap; }
-    /* Inventar-Zeilen optisch zuruecknehmen, damit das Auge zu den Bewertungen wandert */
+    /* System-Info-Zeilen optisch zuruecknehmen, damit das Auge zu den Bewertungen wandert */
     tr.inv td.item, tr.inv td.value { color: #6b7280; }
     .reco { color: #fbbf24; font-size: 0.85rem; margin-top: 0.3rem; font-style: italic; }
     .impact { font-size: 0.8rem; margin-top: 0.2rem; color: #9ca3af; }
@@ -850,12 +850,12 @@ $html = @"
     <div class="summary-card issue"><div class="count">$cIss</div><div class="label">ISSUE</div></div>
     <div class="summary-card manuell"><div class="count">$cMan</div><div class="label">MANUELL</div></div>
     <div class="summary-card skip"><div class="count">$cSkp</div><div class="label">SKIP</div></div>
-    <div class="summary-card inv"><div class="count">$cInv</div><div class="label">Inventar</div></div>
+    <div class="summary-card inv"><div class="count">$cInv</div><div class="label">System-Info</div></div>
 </div>
 <div class="legend">
     OK = gegen Soll geprueft, passt &middot; TWEAK = via Suite verbesserbar &middot;
     ISSUE = via Suite zu beheben, wichtig &middot; MANUELL = selbst zu beheben (BIOS/Treiber/Windows) &middot;
-    SKIP = nicht pruefbar &middot; Inventar = reine Identifikation
+    SKIP = nicht pruefbar &middot; System-Info = reine Identifikation
 </div>
 
 $($sectionsHtml -join "`n")
@@ -872,6 +872,6 @@ $html | Out-File -FilePath $reportPath -Encoding UTF8
 
 Write-Host "`n=== Diagnose fertig ===" -ForegroundColor Green
 Write-Host "Report: $reportPath" -ForegroundColor Cyan
-Write-Host "OK: $cOk  |  TWEAK: $cTwk  |  ISSUE: $cIss  |  MANUELL: $cMan  |  SKIP: $cSkp  |  Inventar: $cInv`n" -ForegroundColor Yellow
+Write-Host "OK: $cOk  |  TWEAK: $cTwk  |  ISSUE: $cIss  |  MANUELL: $cMan  |  SKIP: $cSkp  |  System-Info: $cInv`n" -ForegroundColor Yellow
 Write-Host 'Fixes anwenden: PUBG Performance Suite (Tweaks-Tab / Grafik-Tab).' -ForegroundColor Gray
 try { Start-Process $reportPath } catch {}

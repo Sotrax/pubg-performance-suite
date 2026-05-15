@@ -55,7 +55,7 @@ Komponenten auf **eine** gemeinsame Konfiguration zusammen.
 **`diagnose/PUBG-Diagnose-v6.ps1` → `diagnose/PUBG-Diagnose-v7.ps1`**
 
 - Neue, mechanisch definierte Status-Kategorien:
-  `INVENTAR` (reine Identifikation) · `OK` · `TWEAK` (via Suite verbesserbar) ·
+  `SYSINFO` (reine Identifikation) · `OK` · `TWEAK` (via Suite verbesserbar) ·
   `ISSUE` (via Suite zu beheben, wichtig) · `MANUELL` (selbst zu beheben:
   BIOS/Treiber/Windows) · `SKIP`. Kein `INFO` mehr.
 - Grafik-Checks vergleichen gegen `PUBGProfile.psd1` — der alte Konflikt
@@ -76,7 +76,7 @@ Komponenten auf **eine** gemeinsame Konfiguration zusammen.
 - **Entfernt**: interaktive Fix-Phase + Admin-Script-Generierung. Das Skript ist
   jetzt **report-only** — alle Fixes laufen über die Suite. Damit gibt es keine
   doppelt gepflegte Fix-Logik mehr.
-- HTML-Report: neue Summary-Cards (Inventar-Card bewusst dezenter), INVENTAR-
+- HTML-Report: neue Summary-Cards (System-Info-Card bewusst dezenter), SYSINFO-
   Zeilen ausgegraut, Footer mit Profil-Version + SHA256-Hash.
 
 **Recherche-Hinweise (geprüft, nicht ungeprüft übernommen)**
@@ -90,7 +90,7 @@ Komponenten auf **eine** gemeinsame Konfiguration zusammen.
 - Die Profil-Werte sind mit dem Pro-Konsens 2025/2026 konsistent (minimale,
   vertretbare Abweichungen bei Texturen=Hoch und Sichtweite=Mittel).
 
-**MTU**: Der MTU-Check ist von WARN+Fix auf reines `INVENTAR` (nur Wertanzeige)
+**MTU**: Der MTU-Check ist von WARN+Fix auf reines `SYSINFO` (nur Wertanzeige)
 zurückgestuft — 1492 zu erzwingen schadet auf modernen Kabel-/Glasfaser-
 Anschlüssen leicht, ein MTU-Tweak wurde bewusst nicht angelegt.
 

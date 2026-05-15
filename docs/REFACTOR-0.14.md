@@ -29,10 +29,10 @@ als auch standalone in der Diagnose.
 - Diag-Skript-Referenz auf `PUBG-Diagnose-v7.ps1`.
 
 ### Geändert: `diagnose/PUBG-Diagnose-v6.ps1` → `diagnose/PUBG-Diagnose-v7.ps1`
-- Neue Status-Kategorien `INVENTAR/OK/TWEAK/ISSUE/MANUELL/SKIP`.
+- Neue Status-Kategorien `SYSINFO/OK/TWEAK/ISSUE/MANUELL/SKIP`.
 - Grafik-Checks gegen `PUBGProfile.psd1`, System-Tweak-Checks per Schleife über
   die Registry.
-- MMCSS-Bugfix, Multi-Monitor via `Screen.AllScreens`, MTU → INVENTAR.
+- MMCSS-Bugfix, Multi-Monitor via `Screen.AllScreens`, MTU → SYSINFO.
 - Display-Skalierung + Timer Resolution entfernt.
 - Report-only: interaktive Fix-Phase + Admin-Script-Generierung entfernt.
 
@@ -66,7 +66,7 @@ bestehende `history.json` gültig und der 1-Klick-Revert funktioniert weiter.
 - **Entfernt aus `$Global:Tweaks`**: `esportgfx` — ist kein System-Tweak, wird
   über `PUBGProfile.psd1` + den Grafik-Tab verwaltet.
 - **Nicht neu angelegt**: ein MTU-Tweak. 1492 zu erzwingen schadet auf modernen
-  Anschlüssen; der MTU-Check ist in der Diagnose nur noch `INVENTAR`.
+  Anschlüssen; der MTU-Check ist in der Diagnose nur noch `SYSINFO`.
 
 ## 3. Migrationshinweise für Nutzer
 
@@ -89,7 +89,7 @@ Auf dem Windows-Gaming-PC, nach `git pull` bzw. `irm | iex`:
    Profil anwenden" (PUBG geschlossen!) → danach Status `OK`.
 4. **Diagnose** — Diagnose-Button bzw. `PUBG-Diagnose-v7.ps1` direkt starten.
    HTML-Report öffnet sich. Prüfen:
-   - Summary-Cards: `OK / TWEAK / ISSUE / MANUELL / SKIP / Inventar`.
+   - Summary-Cards: `OK / TWEAK / ISSUE / MANUELL / SKIP / System-Info`.
    - Kein einziger Eintrag hat Status `INFO`.
    - Abschnitt „PUBG Settings": alle `Grafik: …`-Zeilen stehen auf `OK`
      (Akzeptanzkriterium 1 — direkt nach dem Profil-Apply aus Schritt 3).
