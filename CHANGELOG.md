@@ -7,13 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Planned
-- Granularer Grafik-Tab: Esport-Profil als Basis + Einzel-Dropdowns pro Setting (Anzeigemodus, AA, Schatten, Texturen ...)
+- Granularer Grafik-Tab: Einzel-Dropdowns pro Setting (Anzeigemodus, AA, Schatten, Texturen ...) als Erweiterung des neuen Grafik-Tabs
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - Backup-Manager UI (browse + restore historical backups)
 - Auto-update check at startup
 - English UI localization
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
+
+## [0.13.0-beta] - 2026-05-15
+### Changed — Eigener "Grafik"-Tab fuer das Esport-Grafik-Profil
+
+Das in 0.12.0 eingefuehrte `esportgfx`-Profil wurde aus der allgemeinen
+Tweak-Liste herausgeloest und bekommt einen eigenen Tab. Die In-Game-Grafik
+ist zu wichtig, um sie pauschal mit "Apply All" zusammen mit den System-Tweaks
+anzuwenden - sie wird jetzt bewusst getrennt verwaltet.
+
+- Neuer Tab **"Grafik"** zwischen Tweaks und Settings:
+  - Status-Anzeige (OK / WARN / SKIP) des aktuellen In-Game-Grafik-Profils
+  - Lesbare Auflistung aller Profil-Werte (Anzeigemodus, AA, Texturen, Schatten,
+    Sichtweite, Post-Processing, Effekte, Laub, V-Sync, Motion Blur ...)
+  - Eigener Button **"Competitive-Profil anwenden"** mit Bestaetigungs-Dialog
+    (Hinweis: PUBG muss geschlossen sein)
+  - Eigener Button **"Zuruecksetzen (Backup)"** - stellt GameUserSettings.ini
+    aus dem letzten Backup wieder her, nur aktiv wenn ein Backup existiert
+  - "Status pruefen"-Button zum manuellen Neuladen
+- `esportgfx` wird **nicht mehr** von "Apply All" / "Apply Selected" erfasst und
+  erscheint nicht mehr im Tweaks-Tab. History-/Snapshot-/Backup-System bleibt
+  unveraendert (gemeinsame `Invoke-TweakApply` / `Invoke-TweakRevert`).
 
 ## [0.12.0-beta] - 2026-05-15
 ### Added — PUBG Esport-Grafik-Tweak (die fehlende Kernfunktion)
