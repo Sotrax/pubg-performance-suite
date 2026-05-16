@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.21.0-beta'
+    Version    = '0.22.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1719,6 +1719,46 @@ $xamlTemplate = @'
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+
+            <!-- TAB: KEY GEN (Retro-Spass-Tab, bewusster Bruch zum cleanen Rest) -->
+            <TabItem Header="Key Gen">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20">
+                        <!-- ASCII-Art-Header -->
+                        <Border Background="@@BgBase@@" CornerRadius="4" Padding="14,12" Margin="0,0,0,12">
+                            <TextBlock x:Name="lblKeygenArt" FontFamily="Consolas" FontSize="13" Foreground="@@StatusBest@@" TextAlignment="Center"/>
+                        </Border>
+
+                        <!-- Keygen-Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="PUBG SUITE PRO - Lizenzschluessel-Generator" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"
+                                           Text="Reine Nostalgie-Deko im Stil der alten Szene-Keygens - erzeugt dekorative Zufalls-Codes voellig ohne Funktion. Knackt nichts, schaltet nichts frei. Just for the vibe."/>
+
+                                <Border Background="@@BgBase@@" CornerRadius="4" Padding="16,18" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <TextBlock Text="DEIN LIZENZSCHLUESSEL" Foreground="@@TextDisabled@@" FontSize="10" FontWeight="SemiBold" TextAlignment="Center"/>
+                                        <TextBlock x:Name="lblKeygenCode" Text="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" FontFamily="Consolas" FontSize="24" FontWeight="Bold" Foreground="@@Accent@@" TextAlignment="Center" Margin="0,6,0,0"/>
+                                        <TextBlock x:Name="lblKeygenStatus" Text="Bereit. Klick GENERATE." Foreground="@@TextSecondary@@" FontSize="11" TextAlignment="Center" Margin="0,8,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="btnKeygenGenerate" Content="*  GENERATE  *" Style="{StaticResource SuccessButton}" Width="200" Height="44" FontWeight="Bold" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnKeygenFormat" Content="Format: 6 x 4" Width="150" Height="44" Margin="0,0,8,0"/>
+                                    <Button x:Name="btnKeygenMusic" Content="MUSIK: AUS" Width="150" Height="44"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Greetz-Scroller -->
+                        <Border Background="@@BgBase@@" CornerRadius="4" Padding="10,6" ClipToBounds="True">
+                            <TextBlock x:Name="lblKeygenGreetz" FontFamily="Consolas" FontSize="12" Foreground="@@StatusOK@@"/>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
         </TabControl>
 
         <!-- Footer -->
@@ -1763,7 +1803,8 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'capCompareCard','btnCapCompareClose','lblCapCompareInfo','capCompareList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
-    'lblPaths','tbMonitorPattern','lblFooter','lblAboutVersion')) {
+    'lblPaths','tbMonitorPattern','lblFooter','lblAboutVersion',
+    'lblKeygenArt','lblKeygenCode','lblKeygenStatus','btnKeygenGenerate','btnKeygenFormat','btnKeygenMusic','lblKeygenGreetz')) {
     $ctrls[$name] = $window.FindName($name)
 }
 
@@ -3892,6 +3933,156 @@ if ($hist.Count -gt 0) {
     Show-CapResult $displayResult
 }
 
+# ==================== KEY GEN (Retro-Spass-Tab) ====================
+# Reine Deko - generiert funktionslose Zufalls-Codes und spielt eine 8-bit-
+# Loop-Melodie via [Console]::Beep. Hommage an die alten Szene-Keygens.
+$Global:KeygenState   = @{ Groups = 6; Len = 4; RollTimer = $null }
+$Global:KeygenRandom  = New-Object System.Random
+$Global:KeygenCharset = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.ToCharArray()
+# Thread-uebergreifend geteilter Musik-Zustand (synchronized -> sicher zwischen
+# UI-Thread und Audio-Runspace).
+$Global:KeygenAudio = [hashtable]::Synchronized(@{ Running = $false; PowerShell = $null })
+
+# Erzeugt einen dekorativen Code: $Groups Gruppen je $Len Zeichen, '-'-getrennt.
+function New-KeygenCode {
+    param([int]$Groups, [int]$Len)
+    $parts = for ($g = 0; $g -lt $Groups; $g++) {
+        $chars = for ($i = 0; $i -lt $Len; $i++) {
+            $Global:KeygenCharset[$Global:KeygenRandom.Next(0, $Global:KeygenCharset.Length)]
+        }
+        -join $chars
+    }
+    return ($parts -join '-')
+}
+
+# Kurze "Roll"-Animation (Code rattert), dann settle auf den finalen Code.
+function Invoke-KeygenGenerate {
+    if ($Global:KeygenState.RollTimer) { $Global:KeygenState.RollTimer.Stop() }
+    $ctrls.lblKeygenStatus.Text = 'Generiere...'
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(45)
+    $timer.Tag = 0
+    $timer.Add_Tick({
+        $this.Tag = [int]$this.Tag + 1
+        $ctrls.lblKeygenCode.Text = New-KeygenCode -Groups $Global:KeygenState.Groups -Len $Global:KeygenState.Len
+        if ([int]$this.Tag -ge 12) {
+            $this.Stop()
+            $ctrls.lblKeygenStatus.Text = "Schluessel generiert  -  $(Get-Date -Format 'HH:mm:ss')  -  [ cracked 4 the lulz ]"
+        }
+    })
+    $Global:KeygenState.RollTimer = $timer
+    $timer.Start()
+}
+
+# Startet die 8-bit-Loop-Melodie in einem Hintergrund-Runspace. [Console]::Beep
+# blockiert - darf darum nie den UI-Thread treffen. Fehler-tolerant: schlaegt
+# der Start fehl, bleibt der Tab trotzdem voll bedienbar (nur eben stumm).
+function Start-KeygenMusic {
+    if ($Global:KeygenAudio.Running) { return }
+    try {
+        # alten (beendeten) Runspace aufraeumen, falls vorhanden
+        if ($Global:KeygenAudio.PowerShell) {
+            try { $Global:KeygenAudio.PowerShell.Dispose() } catch {}  # bereits beendet - egal
+            $Global:KeygenAudio.PowerShell = $null
+        }
+        $Global:KeygenAudio.Running = $true
+        $rs = [RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable('Audio', $Global:KeygenAudio)
+        $ps = [PowerShell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            # Melodie als Paare @(Frequenz_Hz, Dauer_ms); Frequenz 0 = Pause.
+            $melody = @(
+                @(523,140),@(659,140),@(784,140),@(659,140),
+                @(523,140),@(659,140),@(784,260),@(0,70),
+                @(587,140),@(698,140),@(880,140),@(698,140),
+                @(587,140),@(698,140),@(880,260),@(0,70),
+                @(523,150),@(440,150),@(523,150),@(659,150),
+                @(784,300),@(659,150),@(523,300),@(0,160)
+            )
+            while ($Audio.Running) {
+                foreach ($n in $melody) {
+                    if (-not $Audio.Running) { break }
+                    if ($n[0] -le 0) { Start-Sleep -Milliseconds $n[1] }
+                    else { [console]::Beep([int]$n[0], [int]$n[1]) }
+                }
+            }
+        })
+        $Global:KeygenAudio.PowerShell = $ps
+        [void]$ps.BeginInvoke()
+        Write-SuiteLog 'Keygen-Musik gestartet' 'INFO'
+    } catch {
+        $Global:KeygenAudio.Running = $false
+        Write-SuiteLog "Keygen-Musik Start-Fehler: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+# Stoppt die Musik. Der Runspace-Loop bricht beim naechsten Ton ab (<=~300ms);
+# das Dispose passiert lazy beim naechsten Start oder beim Fenster-Schliessen.
+function Stop-KeygenMusic {
+    $Global:KeygenAudio.Running = $false
+}
+
+$ctrls.btnKeygenGenerate.Add_Click({ Invoke-KeygenGenerate })
+
+$ctrls.btnKeygenFormat.Add_Click({
+    if ($Global:KeygenState.Groups -eq 6) {
+        $Global:KeygenState.Groups = 8; $Global:KeygenState.Len = 3
+        $ctrls.btnKeygenFormat.Content = 'Format: 8 x 3'
+    } else {
+        $Global:KeygenState.Groups = 6; $Global:KeygenState.Len = 4
+        $ctrls.btnKeygenFormat.Content = 'Format: 6 x 4'
+    }
+    Invoke-KeygenGenerate
+})
+
+$ctrls.btnKeygenMusic.Add_Click({
+    if ($Global:KeygenAudio.Running) {
+        Stop-KeygenMusic
+        $ctrls.btnKeygenMusic.Content = 'MUSIK: AUS'
+    } else {
+        Start-KeygenMusic
+        $ctrls.btnKeygenMusic.Content = if ($Global:KeygenAudio.Running) { 'MUSIK: AN' } else { 'MUSIK: AUS' }
+    }
+})
+
+# Musik nicht ueber den Key-Gen-Tab hinaus weiterlaufen lassen. WICHTIG: das
+# SelectionChanged der ComboBoxen im Grafik-Tab ist ein Routed-Event und blubbert
+# bis zum TabControl hoch - darum nur auf echte Tab-Wechsel reagieren.
+$ctrls.mainTabs.Add_SelectionChanged({
+    if ($args[1].Source -isnot [System.Windows.Controls.TabControl]) { return }
+    if ($Global:KeygenAudio.Running) {
+        $sel = $ctrls.mainTabs.SelectedItem
+        if (-not $sel -or "$($sel.Header)" -ne 'Key Gen') {
+            Stop-KeygenMusic
+            $ctrls.btnKeygenMusic.Content = 'MUSIK: AUS'
+        }
+    }
+})
+
+# ASCII-Art-Header (reines ASCII - keine Encoding-Risiken)
+$ctrls.lblKeygenArt.Text = @'
+==================================================
+       P U B G   S U I T E   ::   K E Y G E N
+       - scene release  //  2026 edition -
+==================================================
+'@
+
+# Greetz-Scroller (DispatcherTimer schiebt den String zeichenweise)
+$Global:KeygenGreetz = '***  GREETINGS TO ALL PUBG GRINDERS  ***  STAY SALTY  ***  GG WP  ***  WINNER WINNER CHICKEN DINNER  ***  '
+$keygenGreetzTimer = New-Object System.Windows.Threading.DispatcherTimer
+$keygenGreetzTimer.Interval = [TimeSpan]::FromMilliseconds(220)
+$keygenGreetzTimer.Add_Tick({
+    $s = $Global:KeygenGreetz
+    $Global:KeygenGreetz = $s.Substring(1) + $s.Substring(0,1)
+    if ($ctrls.lblKeygenGreetz) { $ctrls.lblKeygenGreetz.Text = $Global:KeygenGreetz }
+})
+$keygenGreetzTimer.Start()
+
+# Startwert im Code-Feld (ohne Animation)
+$ctrls.lblKeygenCode.Text = New-KeygenCode -Groups $Global:KeygenState.Groups -Len $Global:KeygenState.Len
+
 # Version dynamisch in Header, Window-Title und About-Card (vermeidet "v1.0.0-PoC" Bug)
 $ctrls.lblVersion.Text = "v$($Global:Suite.Version)"
 $window.Title = "PUBG Performance Suite v$($Global:Suite.Version)"
@@ -3969,6 +4160,8 @@ $window.Add_Closing({
             Write-SuiteLog "Window-Close: stoppe laufende Capture" 'INFO'
             Cleanup-CapState
         }
+        # Keygen-Musik-Runspace stoppen (sonst beept es nach dem Schliessen weiter)
+        Stop-KeygenMusic
     } catch {}  # Fenster schliesst ohnehin - Fehler hier unkritisch
 })
 

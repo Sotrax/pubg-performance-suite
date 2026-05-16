@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.22.0-beta] - 2026-05-16
+### Added
+- **„Key Gen"-Tab (Retro-Spaß-Easter-Egg).** Bewusster Stil-Bruch zum sonst
+  cleanen Tool — eine Hommage an die Keygens der alten Warez-/Demoscene:
+  ASCII-Art-Header, großes Code-Feld mit „Roll"-Animation, ein scrollender
+  „greetz"-Lauftext und eine 8-bit-Loop-Melodie. Der „GENERATE"-Knopf würfelt
+  einen rein dekorativen Zufalls-Code (umschaltbar 6×4 ↔ 8×3 Zeichen) — er
+  schaltet nichts frei und knackt nichts, ist reine Nostalgie-Deko. Die Musik
+  (`MUSIK: AN/AUS`) wird über `[Console]::Beep` in einem Hintergrund-Runspace
+  gespielt, damit die UI nicht blockiert; sie stoppt automatisch beim Verlassen
+  des Tabs und beim Schließen des Fensters.
+
 ## [0.21.0-beta] - 2026-05-16
 ### Changed
 - **Auto-Update-Check prüft jetzt den `main`-Branch statt GitHub-Releases.**
