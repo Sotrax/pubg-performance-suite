@@ -1,18 +1,25 @@
 ﻿<#
 .SYNOPSIS
-    PUBG Performance Suite v1.0 (PoC)
-    GUI-Wrapper fuer Diagnose, Tweaks und Game-Mode-Workflow
+    PUBG Performance Suite - WPF-GUI fuer Diagnose, Tweaks, Grafikprofil,
+    Performance-Capture und Game-Mode-Workflow.
 
 .DESCRIPTION
-    Phase 1 PoC. Drei funktionale Tabs:
-    - Dashboard: Live-Status aller relevanten Settings
-    - Diagnose: ruft PUBG-Diagnose-v7.ps1 auf, oeffnet HTML
-    - Game Mode: One-Click pre-/post-game prep
+    Windows-PowerShell-5.1-/WPF-Tool zum Diagnostizieren und Tunen von PUBG
+    fuer den kompetitiven Einsatz. Sechs Tabs:
+      - Dashboard:  Live-Status aller relevanten Settings + Empfehlungen
+      - Tweaks:     System-/PUBG-Tweaks aus der Tweak-Registry anwenden/zuruecknehmen
+      - Game Mode:  One-Click pre-/post-game prep (Monitore solo, RTSS aus ...)
+      - Capture:    60s-Frametime-Messung via Intel PresentMon, Trend + Vergleich
+      - Diagnose:   ruft PUBG-Diagnose-v7.ps1 auf, oeffnet den HTML-Report
+      - Settings:   Hardware-Erkennung, Monitor-Pattern, Logs/Backups
 
-    Tools werden bei Bedarf auto-installiert:
-      C:\Tools\MultiMonitorTool\
-      C:\Tools\nvidiaProfileInspector\
-      C:\Tools\PresentMon\
+    Single Source of Truth in config\: PUBGProfile.psd1 (Grafikprofil) und
+    PUBGTweakRegistry.psm1 (Tweak-Registry) - Suite UND Diagnose lesen beides.
+
+    Externe Tools werden bei Bedarf nach C:\Tools\ auto-installiert
+    (MultiMonitorTool, nvidiaProfileInspector, PresentMon).
+
+    Die Version steht zentral in $Global:Suite.Version.
 
 .NOTES
     Start: PUBG-Suite.bat (Doppelklick) oder
@@ -23,7 +30,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.16.0-beta'
+    Version    = '0.17.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1249,6 +1256,22 @@ $xamlTemplate = @'
                             </StackPanel>
                         </Border>
 
+                        <!-- Vergleich Card (per "Compare to previous" ein-/ausgeblendet) -->
+                        <Border x:Name="capCompareCard" Style="{StaticResource Card}" Visibility="Collapsed">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Vergleich: aktuelle vs. vorherige Messung" Style="{StaticResource SectionHeader}"/>
+                                    <Button Grid.Column="1" x:Name="btnCapCompareClose" Content="Schliessen" Width="100" Height="26" VerticalAlignment="Top"/>
+                                </Grid>
+                                <TextBlock x:Name="lblCapCompareInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,8"/>
+                                <StackPanel x:Name="capCompareList"/>
+                            </StackPanel>
+                        </Border>
+
                         <!-- History/Trend Card -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -1517,6 +1540,7 @@ foreach ($name in @('mainTabs','lblVersion','lblAdmin','adminBadge','lblTopStatu
     'lblCapUntilDisp','lblCapClickPhoton','lblCapGSync','lblCapStutter',
     'lblCapPresentMode','lblCapPresentExplain',
     'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapRebuild','btnCapClearHist','lblCapHistInfo','capHistoryList',
+    'capCompareCard','btnCapCompareClose','lblCapCompareInfo','capCompareList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
     'lblPaths','tbMonitorPattern','lblFooter','lblAboutVersion')) {
@@ -3263,43 +3287,118 @@ function Format-Delta {
     return @{ Text = "$diffStr $pctStr"; Color = $color }
 }
 
+# Baut die In-Tab-Vergleichsansicht (Card capCompareCard) aus zwei Messungen.
+# Loest die fruehere MessageBox ab - gleiche Metriken, aber als farbcodierte
+# Tabelle im Tab statt als modaler Dialog.
+function Show-CapCompare {
+    param($Current, $Previous)
+    $ctrls.capCompareList.Children.Clear()
+
+    $curTime  = Format-CapTimeShort $Current.CaptureTime
+    $prevTime = Format-CapTimeShort $Previous.CaptureTime
+    $ctrls.lblCapCompareInfo.Text = "$prevTime  ->  $curTime      gruene Delta = Verbesserung, rote = Verschlechterung"
+
+    # Spalten: Metrik(150) | Vorher(95) | Nachher(95) | Delta(190)
+    $colWidths = @(150,95,95,190)
+
+    # Header-Row
+    $hdr = New-Object System.Windows.Controls.Border
+    $hdr.Background = $Global:SuiteColors.BgBase
+    $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+    $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
+    $hdrGrid = New-Object System.Windows.Controls.Grid
+    $hdr.Child = $hdrGrid
+    foreach ($w in $colWidths) {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = $w; $hdrGrid.ColumnDefinitions.Add($cd) | Out-Null
+    }
+    $hdrTexts = @('METRIK','VORHER','NACHHER','DELTA')
+    for ($i = 0; $i -lt $hdrTexts.Count; $i++) {
+        $tb = New-Object System.Windows.Controls.TextBlock
+        $tb.Text = $hdrTexts[$i]; $tb.Foreground = $Global:SuiteColors.TextSecondary
+        $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
+        [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+        $hdrGrid.Children.Add($tb) | Out-Null
+    }
+    $ctrls.capCompareList.Children.Add($hdr) | Out-Null
+
+    # Metrik-Definitionen: Label, Property-Name, Einheit, LowerIsBetter
+    $metrics = @(
+        @{ Label='AVG FPS';  Prop='AvgFps';        Unit='';    Lower=$false }
+        @{ Label='1% Low';   Prop='OnePctLow';     Unit='';    Lower=$false }
+        @{ Label='0.1% Low'; Prop='ZeroOnePctLow'; Unit='';    Lower=$false }
+        @{ Label='StdDev';   Prop='StdDevMs';      Unit=' ms'; Lower=$true }
+        @{ Label='Stutter';  Prop='StutterPct';    Unit=' %';  Lower=$true }
+    )
+    foreach ($m in $metrics) {
+        $prevVal = $Previous.($m.Prop)
+        $curVal  = $Current.($m.Prop)
+        $delta = Format-Delta -Current ([double]$curVal) -Previous ([double]$prevVal) -Unit $m.Unit -LowerIsBetter $m.Lower
+
+        $row = New-Object System.Windows.Controls.Border
+        $row.Background = $Global:SuiteColors.Surface1
+        $row.Padding = (New-Object System.Windows.Thickness 8,5,8,5)
+        $row.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
+        $row.CornerRadius = (New-Object System.Windows.CornerRadius 2)
+        $grid = New-Object System.Windows.Controls.Grid
+        $row.Child = $grid
+        foreach ($w in $colWidths) {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = $w; $grid.ColumnDefinitions.Add($cd) | Out-Null
+        }
+        $deltaText  = if ($delta) { $delta.Text }  else { '-' }
+        $deltaColor = if ($delta) { $delta.Color } else { $Global:SuiteColors.TextSecondary }
+        $vals    = @("$($m.Label)", "$prevVal$($m.Unit)", "$curVal$($m.Unit)", $deltaText)
+        $cols    = @($Global:SuiteColors.TextSecondary, $Global:SuiteColors.TextPrimary, $Global:SuiteColors.TextPrimary, $deltaColor)
+        $weights = @('Normal','Normal','SemiBold','SemiBold')
+        for ($i = 0; $i -lt 4; $i++) {
+            $tb = New-Object System.Windows.Controls.TextBlock
+            $tb.Text = "$($vals[$i])"; $tb.Foreground = $cols[$i]; $tb.FontSize = 12
+            $tb.FontWeight = $weights[$i]
+            $tb.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
+            [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+            $grid.Children.Add($tb) | Out-Null
+        }
+        $ctrls.capCompareList.Children.Add($row) | Out-Null
+    }
+
+    # Present-Mode-Zeile (volle Breite) - Mode ist kategorisch, kein Delta
+    $prevMode = if ($Previous.PresentModeLabel) { [string]$Previous.PresentModeLabel } elseif ($Previous.PresentMode) { [string]$Previous.PresentMode } else { '?' }
+    $curMode  = if ($Current.PresentModeLabel)  { [string]$Current.PresentModeLabel }  elseif ($Current.PresentMode)  { [string]$Current.PresentMode }  else { '?' }
+    $prevMode = $prevMode -replace '^Mode\s+',''
+    $curMode  = $curMode  -replace '^Mode\s+',''
+    $modeRow = New-Object System.Windows.Controls.Border
+    $modeRow.Background = $Global:SuiteColors.Surface1
+    $modeRow.Padding = (New-Object System.Windows.Thickness 8,5,8,5)
+    $modeRow.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
+    $modeRow.CornerRadius = (New-Object System.Windows.CornerRadius 2)
+    $modeTb = New-Object System.Windows.Controls.TextBlock
+    $modeTb.FontSize = 12; $modeTb.TextWrapping = 'Wrap'
+    if ($prevMode -eq $curMode) {
+        $modeTb.Text = "Present Mode:  $curMode  (unveraendert)"
+        $modeTb.Foreground = $Global:SuiteColors.TextSecondary
+    } else {
+        $modeTb.Text = "Present Mode geaendert:  $prevMode  ->  $curMode"
+        $modeTb.Foreground = $Global:SuiteColors.StatusWarn
+    }
+    $modeRow.Child = $modeTb
+    $ctrls.capCompareList.Children.Add($modeRow) | Out-Null
+
+    $ctrls.capCompareCard.Visibility = 'Visible'
+}
+
 $ctrls.btnCapCompare.Add_Click({
     $hist = @(Get-CaptureHistory)
     if ($hist.Count -lt 2) {
         [System.Windows.MessageBox]::Show('Mindestens 2 Messungen noetig fuer Vergleich. Aktuell vorhanden: ' + $hist.Count, 'Compare', 'OK', 'Information') | Out-Null
         return
     }
-    $current = $hist[-1]
-    $previous = $hist[-2]
+    Show-CapCompare -Current $hist[-1] -Previous $hist[-2]
+    $ctrls.capCompareCard.BringIntoView()
+})
 
-    $deltaAvg   = Format-Delta -Current ([double]$current.AvgFps) -Previous ([double]$previous.AvgFps)
-    $delta1     = Format-Delta -Current ([double]$current.OnePctLow) -Previous ([double]$previous.OnePctLow)
-    $delta01    = Format-Delta -Current ([double]$current.ZeroOnePctLow) -Previous ([double]$previous.ZeroOnePctLow)
-    $deltaStd   = Format-Delta -Current ([double]$current.StdDevMs) -Previous ([double]$previous.StdDevMs) -Unit ' ms' -LowerIsBetter $true
-    $deltaStut  = Format-Delta -Current ([double]$current.StutterPct) -Previous ([double]$previous.StutterPct) -Unit ' %' -LowerIsBetter $true
-
-    $curTime = Format-CapTimeShort $current.CaptureTime
-    $prevTime = Format-CapTimeShort $previous.CaptureTime
-
-    $modeChange = ''
-    if ($current.PresentMode -ne $previous.PresentMode) {
-        $modeChange = "`n`nPresent Mode geaendert: $($previous.PresentMode) -> $($current.PresentMode)"
-    }
-
-    $msg = @"
-Vergleich aktuelle vs. vorherige Messung
-
-$prevTime  ->  $curTime
-
-   AVG FPS:     $($previous.AvgFps) -> $($current.AvgFps)   $($deltaAvg.Text)
-   1% Low:      $($previous.OnePctLow) -> $($current.OnePctLow)   $($delta1.Text)
-   0.1% Low:    $($previous.ZeroOnePctLow) -> $($current.ZeroOnePctLow)   $($delta01.Text)
-   StdDev:      $($previous.StdDevMs) -> $($current.StdDevMs) ms   $($deltaStd.Text)
-   Stutter:     $($previous.StutterPct) -> $($current.StutterPct) %   $($deltaStut.Text)$modeChange
-
-Tipp: gruene Deltas = Verbesserung, rote = Verschlechterung
-"@
-    [System.Windows.MessageBox]::Show($msg, 'Capture-Vergleich', 'OK', 'Information') | Out-Null
+$ctrls.btnCapCompareClose.Add_Click({
+    $ctrls.capCompareCard.Visibility = 'Collapsed'
 })
 
 $ctrls.btnCapRebuild.Add_Click({
@@ -3317,6 +3416,7 @@ $ctrls.btnCapClearHist.Add_Click({
         Write-SuiteLog "Capture-History geloescht" 'INFO'
         Update-CapHistory
         $ctrls.capResultGrid.Visibility = 'Collapsed'
+        $ctrls.capCompareCard.Visibility = 'Collapsed'
         $ctrls.lblCapLastInfo.Text = 'History geloescht.'
         $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.TextSecondary
     }

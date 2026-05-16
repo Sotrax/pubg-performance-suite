@@ -13,7 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auto-update check at startup
 - English UI localization
 - GitHub Actions release pipeline
-- Capture: comparison view (delta vs previous)
+
+## [0.17.0-beta] - 2026-05-16
+### Changed
+- **Capture-Vergleich als In-Tab-Ansicht.** Der „Compare to previous"-Button
+  öffnet die letzte vs. vorletzte Messung jetzt in einer eigenen Karte direkt
+  im Capture-Tab statt in einer modalen `MessageBox`. Die fünf Kernmetriken
+  (AVG FPS, 1% Low, 0.1% Low, StdDev, Stutter) stehen als farbcodierte Tabelle
+  mit Vorher-/Nachher-Wert und Delta (grün = Verbesserung, rot =
+  Verschlechterung, richtungsabhängig — bei StdDev/Stutter zählt „niedriger");
+  eine eigene Zeile zeigt, ob sich der Present Mode geändert hat. Die Karte ist
+  über „Schließen" wieder einklappbar und wird beim Leeren der History
+  automatisch ausgeblendet.
+- **Datei-Header aktualisiert.** Der Kopfkommentar von `PUBG-Suite.ps1` nannte
+  noch „v1.0 (PoC)" und „Drei funktionale Tabs" — jetzt korrekt sechs Tabs,
+  ohne hartcodierte Version (die steht zentral in `$Global:Suite.Version`),
+  inkl. Hinweis auf die Single-Source-of-Truth-Dateien in `config\`.
 
 ## [0.16.0-beta] - 2026-05-16
 ### Changed
