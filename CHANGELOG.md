@@ -10,6 +10,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.26.0-beta] - 2026-05-16
+### Fixed
+- **CRITICAL: FPS-Cap war wirkungslos — falsche NVIDIA-Setting-ID.** Der
+  `nvprofile`-Tweak schrieb den Frame Rate Limiter auf die ID `0x10835013` —
+  diese ID existiert nicht. Korrekt ist `0x10835002` (Frame Rate Limiter V3,
+  gegen die offizielle nvidiaProfileInspector-Referenz verifiziert). Der
+  Treiber-FPS-Cap wurde dadurch nie gesetzt; Captures zeigten 240+ FPS trotz
+  angezeigtem 237er-Cap. Zusätzlich:
+  - Der Limiter-Wert wird jetzt **dynamisch** aus `Get-OptimalFpsCap`
+    (Monitor-Hz minus 3) berechnet statt hardgecodet `237` — funktioniert auch
+    bei 144/165/360 Hz.
+  - **Low-Latency-Bug:** `0x10835000` ist ein Bool (Ultra Low Latency Enabled);
+    es wurde fälschlich der Wert `2` geschrieben. Jetzt `1`, plus CPL-State
+    `0x0005F543 = 2` für eine konsistente NVCP-Anzeige.
+  - Das **Competitive-Grafik-Profil** schreibt nun `FrameRateLimit` menükonform
+    auf „Display Based" (Monitor-Hz) in `[/Script/TslGame.TslGameUserSettings]`
+    — mit Post-Apply-Verifikation. Der scharfe Cap (Hz−3) läuft über den
+    NVIDIA-Treiber-Limiter, ein krummer ini-Wert wie 237 ist nicht über das
+    Spielmenü erzeugbar und würde von PUBG zurückgesetzt.
+  - Der `fpscap`-Tweak setzt jetzt ebenfalls „Display Based" (statt Hz−3),
+    nutzt das gehärtete `Update-IniValue`, prüft auf laufendes PUBG und
+    verifiziert den Wert nach dem Schreiben.
+- **Capture: „Fehler: unbekannt" trotz erfolgreichem Capture + Platzhalter in
+  der Fertig-Meldung.** `Analyze-CaptureCSV` gab bei fehlender CSV `$null`
+  zurück; der Capture-Timer deutete das als Erfolg (`$null.Error` ist falsy)
+  und rief `Show-CapResult $null` auf → „Fehler: unbekannt" und leere
+  Platzhalter in „Fertig - Frames erfasst, AvgFps". Die Funktion liefert jetzt
+  immer eine Hashtable (`@{ Error=... }`), und der Timer fängt `-not $result`
+  zusätzlich defensiv ab.
+- **Grafik-Dropdowns weiß-auf-weiß.** Die `ComboBox` hatte kein eigenes
+  ControlTemplate — WPF rendert den geschlossenen Zustand sonst mit dem
+  OS-Default-Style und ignoriert Background/Foreground. Vollständiges
+  Dark-Theme-ControlTemplate ergänzt.
+- **Tweak-Counter inkonsistent (15/16).** SKIP-Tweaks fielen durch kein Raster.
+  Neue Bucket-Logik: `offen + angewendet + by-default-OK + n/a = total`, mit
+  Invariant-Check (Log-WARN bei Verletzung). „by-default-OK" (Status OK ohne
+  Revert-Snapshot) ist nun ein eigener Bucket, in der Statuszeile ausgewiesen.
+
+### Added
+- **Status-Indikatoren pro Grafik-Dropdown.** Jedes Einzel-Einstellungs-Dropdown
+  zeigt rechts `OK`/`BAD` gegen das Competitive-Soll (mit Soll-Wert im Tooltip);
+  oben ein globaler `Competitive-Match: x/8`-Badge.
+- **FPS-Cap als Live-Check im Dashboard.** Neunter Live-Status-Eintrag: prüft
+  In-Game-`FrameRateLimit` (Display-Based) und NVIDIA-Profil-Stamp, inkl.
+  Empfehlungs-Card.
+- **EDID-Hersteller-Lookup.** Monitore ohne UserFriendlyName (oft OLED über DP)
+  werden statt rohem Code wie `AUS27F5` als `ASUS 27F5` angezeigt
+  (PNP-Vendor-ID-Tabelle).
+
+### Changed
+- **Grafik-Button „Competitive-Profil anwenden" ist statusabhängig.** Bei
+  aktivem Profil sekundär dargestellt mit Label „Profil erneut anwenden", bei
+  Abweichung primär-grün.
+- **Monitor-Pattern-Default ist leer** (Solo-Setup) statt hardgecodet
+  `XB271HU`. Der Game-Mode überspringt die Monitor-Deaktivierung bei leerem
+  Pattern explizit (ein leeres Regex würde sonst alle Monitore matchen).
+
 ## [0.25.0-beta] - 2026-05-16
 ### Added
 - **Timer-Resolution-Verifikation.** Der `timerres`-Tweak prüft nur, ob der
