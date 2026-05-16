@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.24.0-beta'
+    Version    = '0.25.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1464,7 +1464,8 @@ $xamlTemplate = @'
                             <Button x:Name="btnApplyAll" Content="Apply All (auto-Status WARN/BAD)" Width="240" Height="32" Margin="0,0,8,0"/>
                             <Button x:Name="btnRefreshTweaks" Content="Refresh" Width="100" Height="32" Margin="0,0,8,0"/>
                             <Button x:Name="btnSelectAll" Content="Select All" Width="100" Height="32" Margin="0,0,8,0"/>
-                            <Button x:Name="btnSelectNone" Content="Clear" Width="80" Height="32"/>
+                            <Button x:Name="btnSelectNone" Content="Clear" Width="80" Height="32" Margin="0,0,8,0"/>
+                            <Button x:Name="btnVerifyTimer" Content="Timer-Res. pruefen" Width="160" Height="32"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="Filter:" Foreground="@@TextSecondary@@" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -1798,7 +1799,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 # Control-Refs
 $ctrls = @{}
 foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblStatusSubtitle','recoList','recoEmptyState','btnStartGameMode','btnExitGameMode',
-    'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
+    'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','btnVerifyTimer','lblTweakInfo','tweakContainer',
     'btnFilterAll','btnFilterOpen','btnFilterDone',
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
     'cmbFullscreen','cmbAA','cmbTexture','cmbViewDist','cmbShadow','cmbPost','cmbEffects','cmbFoliage','btnGfxApplyCustom','lblGfxCustomInfo',
@@ -3022,7 +3023,92 @@ function Update-TweaksTab {
     }
 }
 
+# ==================== TIMER-RESOLUTION-VERIFIKATION =========================
+# Aktiver Probe-Test fuer den 'timerres'-Tweak: ein SEPARATER Prozess fordert
+# die feinste Timer-Resolution an und haelt sie kurz. Sieht die Suite (ein
+# anderer Prozess!) die Aenderung an ihrer eigenen Timer-Resolution, ist das
+# globale Verhalten (GlobalTimerResolutionRequests) nachweislich aktiv. Ein
+# Runspace wuerde nichts beweisen - er teilt sich den Prozess mit der Suite.
+function Initialize-TimerNative {
+    if ('PubgTimerNative' -as [type]) { return }
+    Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PubgTimerNative {
+    [DllImport("ntdll.dll", SetLastError=true)]
+    public static extern int NtQueryTimerResolution(out uint Minimum, out uint Maximum, out uint Current);
+}
+'@
+}
+
+function Invoke-TimerResolutionVerify {
+    try { Initialize-TimerNative }
+    catch {
+        $ctrls.lblTweakInfo.Text = 'Timer-Verifikation: ntdll-Anbindung fehlgeschlagen.'
+        return
+    }
+    # Baseline: aktuelle Timer-Resolution der Suite messen
+    $mn = 0; $mx = 0; $cu = 0
+    [void][PubgTimerNative]::NtQueryTimerResolution([ref]$mn, [ref]$mx, [ref]$cu)
+    if ($cu -le 0 -or $mx -le 0) {
+        $ctrls.lblTweakInfo.Text = 'Timer-Verifikation: Messung nicht moeglich.'
+        return
+    }
+    # Kind-Prozess: fordert in EIGENEM Prozess die feinste Aufloesung an + haelt
+    # sie 3 s. -EncodedCommand vermeidet jegliches Quoting-Problem.
+    $childSrc = @"
+Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class T{[DllImport("ntdll.dll")]public static extern int NtSetTimerResolution(uint d,bool s,out uint c);}'
+`$c=0
+[T]::NtSetTimerResolution($mx,`$true,[ref]`$c)|Out-Null
+Start-Sleep -Milliseconds 3000
+"@
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childSrc))
+    $child = $null
+    try {
+        $child = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru `
+                               -ArgumentList '-NoProfile','-EncodedCommand',$enc
+    } catch {
+        $ctrls.lblTweakInfo.Text = 'Timer-Verifikation: Probe-Prozess konnte nicht gestartet werden.'
+        return
+    }
+    $ctrls.lblTweakInfo.Text = 'Timer-Resolution-Probe laeuft (~1.5 s) ...'
+    # Verzoegerte Zweitmessung via DispatcherTimer - haelt den UI-Thread frei.
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(1500)
+    $t.Tag = @{ Child=$child; C0=$cu; Max=$mx }
+    $t.Add_Tick({
+        $this.Stop()
+        $d = $this.Tag
+        $m1 = 0; $x1 = 0; $c1 = 0
+        [void][PubgTimerNative]::NtQueryTimerResolution([ref]$m1, [ref]$x1, [ref]$c1)
+        try { if ($d.Child -and -not $d.Child.HasExited) { $d.Child.Kill() } } catch {}
+        # Registry-Status (persistente Konfiguration)
+        $regOn = $false
+        try {
+            $rv = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' -Name 'GlobalTimerResolutionRequests' -ErrorAction SilentlyContinue).GlobalTimerResolutionRequests
+            $regOn = ($rv -eq 1)
+        } catch {}
+        $msC0 = '{0:0.00}' -f ($d.C0  / 10000.0)
+        $msC1 = '{0:0.00}' -f ($c1    / 10000.0)
+        $msMx = '{0:0.00}' -f ($d.Max / 10000.0)
+        $reg  = if ($regOn) { 'Registry-Tweak: gesetzt' } else { 'Registry-Tweak: NICHT gesetzt' }
+        if ($c1 -gt 0 -and $c1 -lt ($d.C0 - 100)) {
+            $msg = "[OK]  Globale Timer-Requests AKTIV - der Tweak greift. Ein fremder Prozess senkte den Timer der Suite auf $msC1 ms (vorher $msC0 ms). $reg."
+        } elseif ($d.C0 -le ($d.Max + 100)) {
+            $msg = "[i]  Timer laeuft bereits auf Maximum ($msMx ms) - eine andere App fordert ihn an, eindeutige Probe nicht moeglich. $reg."
+        } elseif ($regOn) {
+            $msg = "[!]  Timer unveraendert bei $msC0 ms - globaler Effekt noch nicht aktiv. Registry ist gesetzt: Reboot steht aus."
+        } else {
+            $msg = "[X]  Timer unveraendert bei $msC0 ms - pro-Prozess-Verhalten. Tweak 'timerres' im Tweaks-Tab anwenden, dann Reboot."
+        }
+        $ctrls.lblTweakInfo.Text = $msg
+        try { Write-SuiteLog "Timer-Verify: $msg" 'INFO' } catch {}
+    })
+    $t.Start()
+}
+
 $ctrls.btnRefreshTweaks.Add_Click({ Update-TweaksTab; Update-StatusGrid })
+$ctrls.btnVerifyTimer.Add_Click({ Invoke-TimerResolutionVerify })
 
 $ctrls.btnFilterAll.Add_Click({ $Global:TweakFilter = 'all'; Update-TweaksTab })
 $ctrls.btnFilterOpen.Add_Click({ $Global:TweakFilter = 'open'; Update-TweaksTab })

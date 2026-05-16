@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.25.0-beta] - 2026-05-16
+### Added
+- **Timer-Resolution-Verifikation.** Der `timerres`-Tweak prüft nur, ob der
+  Registry-Wert gesetzt ist — nicht, ob der Timer *tatsächlich* hochauflösend
+  läuft. Zwei neue Bausteine schließen das:
+  - **Live-Wert im Check.** Der `timerres`-Check zeigt jetzt zusätzlich die
+    aktuell aktive Timer-Resolution (gemessen via `NtQueryTimerResolution` aus
+    `ntdll`), z. B. „AN — Timer aktuell 0,50 ms". Sichtbar im Tweaks-Tab und in
+    der Diagnose.
+  - **Button „Timer-Res. prüfen" im Tweaks-Tab.** Aktiver Probe-Test: ein
+    separater Prozess fordert die feinste Timer-Resolution an; sieht die Suite
+    (ein *anderer* Prozess) die Änderung an ihrer eigenen Timer-Resolution, ist
+    das globale Verhalten (`GlobalTimerResolutionRequests`) nachweislich aktiv.
+    Das beweist die Wirksamkeit direkt — ohne Reboot-Raterei und ohne dass PUBG
+    laufen muss. Läuft non-blocking über einen `DispatcherTimer`; das Ergebnis
+    erscheint als Klartext-Verdikt in der Info-Zeile (aktiv / Reboot ausstehend
+    / nicht angewendet / bereits am Maximum).
+
 ## [0.24.0-beta] - 2026-05-16
 ### Added
 - **Neuer Tweak „Globale Timer-Resolution-Requests: AN".** Seit Windows 10 v2004

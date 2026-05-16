@@ -124,6 +124,28 @@ function Restore-RegistrySnapshot {
     }
 }
 
+# Liest die aktuell aktive System-Timer-Resolution in Millisekunden via ntdll
+# (NtQueryTimerResolution). Gibt $null zurueck, wenn die Messung nicht moeglich
+# ist. Der Typ wird einmalig (prozessweit) per Add-Type angelegt.
+function Get-CurrentTimerResolutionMs {
+    try {
+        if (-not ('PubgTimerNative' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PubgTimerNative {
+    [DllImport("ntdll.dll", SetLastError=true)]
+    public static extern int NtQueryTimerResolution(out uint Minimum, out uint Maximum, out uint Current);
+}
+'@
+        }
+        $mn = 0; $mx = 0; $cu = 0
+        $st = [PubgTimerNative]::NtQueryTimerResolution([ref]$mn, [ref]$mx, [ref]$cu)
+        if ($st -ne 0 -or $cu -le 0) { return $null }
+        return [math]::Round($cu / 10000.0, 2)
+    } catch { return $null }
+}
+
 function Copy-FileToBackup {
     param([string]$SourcePath)
     if (-not (Test-Path $SourcePath)) { return $null }
@@ -1121,8 +1143,13 @@ $script:PUBGTweaks = @(
             try {
                 $k = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel'
                 $v = (Get-ItemProperty $k -Name 'GlobalTimerResolutionRequests' -ErrorAction SilentlyContinue).GlobalTimerResolutionRequests
-                if ($v -eq 1) { @{ Status='OK';    CurrentValue='AN';  Detail='' } }
-                else          { @{ Status='TWEAK'; CurrentValue='AUS'; Detail='Globale Timer-Requests aktivieren (Reboot noetig)' } }
+                # Live-Wert: aktuell aktive Timer-Resolution (kontextabhaengig - nur
+                # hoch, solange ein Prozess sie anfordert). Der definitive Probe-Test
+                # liegt im 'Timer-Res. pruefen'-Button im Tweaks-Tab.
+                $ms = Get-CurrentTimerResolutionMs
+                $live = if ($null -ne $ms) { 'Timer aktuell {0:0.00} ms' -f $ms } else { 'Timer-Messung n/v' }
+                if ($v -eq 1) { @{ Status='OK';    CurrentValue="AN  -  $live";  Detail='' } }
+                else          { @{ Status='TWEAK'; CurrentValue="AUS  -  $live"; Detail='Globale Timer-Requests aktivieren (Reboot noetig)' } }
             } catch { @{ Status='SKIP'; CurrentValue='nicht auslesbar'; Detail='' } }
         }
         Apply={
