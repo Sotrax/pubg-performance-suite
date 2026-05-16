@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.27.0-beta'
+    Version    = '0.28.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -493,8 +493,13 @@ function Get-PrimaryMonitorHz {
 }
 
 function Get-OptimalFpsCap {
+    # Competitive-Cap = Monitor-Hz minus FpsCapOffset (aus PUBGProfile.psd1),
+    # harte Untergrenze 60 FPS - identische Rechnung wie der Tweak 'fpscap'.
     $hz = Get-PrimaryMonitorHz
-    return ($hz - 3)
+    $offset = if ($Global:EsportGfxProfileMeta -and $null -ne $Global:EsportGfxProfileMeta.FpsCapOffset) {
+        [int]$Global:EsportGfxProfileMeta.FpsCapOffset
+    } else { 3 }
+    return [Math]::Max(60, $hz - $offset)
 }
 
 function Update-IniValue {
@@ -578,7 +583,7 @@ function Update-IniValue {
 # --- PUBG-Grafikprofil aus config\PUBGProfile.psd1 laden ----------------------
 # $Global:EsportGfxProfile bekommt exakt die alte Struktur (Sektion -> Keys),
 # damit der Grafik-Tab und die Apply-Logik unveraendert damit arbeiten koennen.
-$Global:EsportGfxProfileMeta = @{ Version = '?'; Path = $Global:Suite.ProfilePath }
+$Global:EsportGfxProfileMeta = @{ Version = '?'; Path = $Global:Suite.ProfilePath; FpsCapOffset = 3 }
 $Global:EsportGfxProfile = $null
 try {
     if (-not (Test-Path $Global:Suite.ProfilePath)) {
@@ -587,6 +592,9 @@ try {
     $profileData = Import-PowerShellDataFile -Path $Global:Suite.ProfilePath -ErrorAction Stop
     $Global:EsportGfxProfile = $profileData.Sections
     $Global:EsportGfxProfileMeta.Version = "$($profileData.ProfileVersion)"
+    if ($null -ne $profileData.FpsCapOffset) {
+        $Global:EsportGfxProfileMeta.FpsCapOffset = [int]$profileData.FpsCapOffset
+    }
     Write-SuiteLog "Grafikprofil geladen: v$($profileData.ProfileVersion) ($($Global:Suite.ProfilePath))" 'INFO'
 } catch {
     Write-SuiteLog "FEHLER beim Laden des Grafikprofils: $($_.Exception.Message)" 'ERROR'
@@ -2778,7 +2786,8 @@ function Analyze-CaptureCSV {
     try {
         $data = Import-Csv $CsvPath
         if ($data.Count -lt 10) {
-            return @{ Error = "CSV zu klein ($($data.Count) Zeilen) - PUBG lief nicht?" }
+            return @{ Error = "Capture abgebrochen: nur $($data.Count) Zeilen erfasst - PUBG lief nicht im Vordergrund oder der Lauf war zu kurz"
+                      Aborted = $true; Frames = $data.Count }
         }
 
         $ft = @($data | ForEach-Object {
@@ -2786,7 +2795,8 @@ function Analyze-CaptureCSV {
         } | Where-Object { $_ -gt 0 })
 
         if ($ft.Count -lt 10) {
-            return @{ Error = "Keine validen Frametimes in CSV" }
+            return @{ Error = "Capture abgebrochen: nur $($ft.Count) gueltige Frametimes erfasst"
+                      Aborted = $true; Frames = $ft.Count }
         }
 
         $sorted = $ft | Sort-Object
@@ -3766,9 +3776,15 @@ function Update-CapToolStatus {
 function Show-CapResult {
     param($Result)
     if (-not $Result -or $Result.Error) {
-        $errMsg = if ($Result) { $Result.Error } else { 'unbekannt' }
-        $ctrls.lblCapLastInfo.Text = "Fehler: $errMsg"
-        $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.StatusError
+        if ($Result -and $Result.Aborted) {
+            # Benigner Abbruch (zu wenige Frames) - WARN-Ton, kein roter Fehler.
+            $ctrls.lblCapLastInfo.Text = [string]$Result.Error
+            $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.StatusWarn
+        } else {
+            $errMsg = if ($Result) { $Result.Error } else { 'unbekannt' }
+            $ctrls.lblCapLastInfo.Text = "Fehler: $errMsg"
+            $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.StatusError
+        }
         $ctrls.capResultGrid.Visibility = 'Collapsed'
         return
     }
@@ -4145,10 +4161,20 @@ function Start-PUBGCapture {
                 $result = Analyze-CaptureCSV -CsvPath $state.OutputCsv
                 if (-not $result -or $result.Error) {
                     $errTxt = if ($result -and $result.Error) { $result.Error } else { 'Analyse lieferte kein Ergebnis' }
-                    $ctrls.lblCapPhase.Text = "Analyse-Fehler: $errTxt"
-                    $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
-                    Show-CapResult $result   # zeigt die Fehlermeldung in 'Letzte Messung'
-                    Write-SuiteLog "Capture Analyse Fehler: $errTxt" 'ERROR'
+                    $aborted = [bool]($result -and $result.Aborted)
+                    Show-CapResult $result   # zeigt die Meldung in 'Letzte Messung'
+                    # Bug #5: ein zu kurzer Capture ist ein Abbruch (WARN), kein
+                    # Fehler - und wird NICHT in die History geschrieben (kein
+                    # Add-CaptureEntry hier), damit kein leerer Slot im Trend landet.
+                    if ($aborted) {
+                        $ctrls.lblCapPhase.Text = $errTxt
+                        $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusWarn
+                        Write-SuiteLog "Capture abgebrochen: $errTxt" 'WARN'
+                    } else {
+                        $ctrls.lblCapPhase.Text = "Analyse-Fehler: $errTxt"
+                        $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
+                        Write-SuiteLog "Capture Analyse Fehler: $errTxt" 'ERROR'
+                    }
                 } else {
                     Show-CapResult $result
                     Add-CaptureEntry $result

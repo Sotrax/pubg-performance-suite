@@ -13,9 +13,10 @@
 #  Werte-Skala der sg.*-Settings (Scalability Groups):
 #    0 = Sehr Niedrig | 1 = Niedrig | 2 = Mittel | 3 = Hoch | 4 = Ultra
 #
-#  NICHT im Profil (bewusst): ResolutionSizeX/Y und FrameRateLimit. Beide sind
-#  monitor-/hardwarespezifisch und werden separat behandelt (die Diagnose listet
-#  sie nur als SYSINFO, ohne Bewertung).
+#  NICHT im Profil (bewusst): ResolutionSizeX/Y. Monitor-/hardwarespezifisch,
+#  von der Diagnose nur als SYSINFO gelistet. Der FPS-Cap dagegen IST hier
+#  steuerbar - ueber FpsCapOffset (siehe unten); der Tweak 'fpscap' rechnet
+#  Monitor-Hz minus Offset und schreibt das Ergebnis in die INI.
 #
 #  Aenderungen an Werten sind User-Master-Entscheidungen - nicht automatisch
 #  anpassen. Bei jeder Wertaenderung die ProfileVersion erhoehen.
@@ -24,9 +25,17 @@
 @{
     # Profil-Version. Erscheint im Footer des Diagnose-Reports, damit
     # nachvollziehbar ist, gegen welches Profil geprueft wurde.
-    ProfileVersion = '1.0'
+    ProfileVersion = '1.1'
 
     Description = 'PUBG Competitive "Balanced Visibility" - menuekonform, BattlEye-safe'
+
+    # Competitive-FPS-Cap-Offset: der scharfe In-Game-Cap ist Monitor-Hz minus
+    # diesen Wert (z. B. 240 Hz - 3 = 237). 3 ist der Blur-Busters-G-SYNC-101-
+    # Richtwert, damit die Framerate sicher im VRR-Fenster unter der Refresh-Rate
+    # bleibt. Der Tweak 'fpscap' liest diesen Wert und schreibt Monitor-Hz minus
+    # Offset in GameUserSettings.ini (FrameRateLimit + InGameCustomFrameRateLimit).
+    # Untergrenze ist 60 FPS (greift nur bei sehr niedrigen Refresh-Raten).
+    FpsCapOffset = 3
 
     # Sections bildet 1:1 die GameUserSettings.ini ab:
     #   Schluessel = INI-Sektionsname (ohne eckige Klammern)
