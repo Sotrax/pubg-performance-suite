@@ -9,7 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
-- GitHub Actions release pipeline
+
+## [0.21.0-beta] - 2026-05-16
+### Changed
+- **Auto-Update-Check prüft jetzt den `main`-Branch statt GitHub-Releases.**
+  Die Suite wird über `launch.ps1` (`irm | iex`) vom `main`-Branch verteilt,
+  nicht über getaggte Releases — der Check vergleicht jetzt konsequent dagegen.
+  Neue Datei `VERSION` im Repo-Root ist die Single Source of Truth für die
+  Versionsnummer: die Suite liest sie beim Start (Fallback bleibt der
+  hartcodierte Wert in `$Global:Suite`), und `Test-SuiteUpdate` lädt dieselbe
+  Datei aus `main` und vergleicht — keine Drift möglich. Ist `main` neuer,
+  zeigt ein Klick auf das Header-Badge jetzt die Update-Anleitung (den genauen
+  `irm | iex`-Befehl) statt einer nicht existierenden Release-Seite.
+- Die GitHub-Actions-Release-Pipeline wurde aus den geplanten Punkten gestrichen
+  — bei branch-basierter Verteilung über `launch.ps1` bringt sie keinen
+  Mehrwert.
 
 ## [0.20.0-beta] - 2026-05-16
 ### Added

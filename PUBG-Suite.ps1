@@ -30,7 +30,9 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.20.0-beta'
+    # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
+    # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
+    Version    = '0.21.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -57,6 +59,18 @@ $Global:Suite = @{
     MonitorPattern = 'XB271HU'
     PUBGSteamURI   = 'steam://run/578080'
     RepoSlug       = 'Sotrax/pubg-performance-suite'  # fuer den Update-Check
+}
+
+# Version aus der VERSION-Datei laden (Single Source of Truth). Der Update-Check
+# vergleicht dieselbe Datei aus dem main-Branch - so kann es keine Drift geben.
+# Fehlt die Datei, bleibt der Fallback-Wert aus $Global:Suite oben gueltig.
+$versionFile = Join-Path $PSScriptRoot 'VERSION'
+if (Test-Path $versionFile) {
+    $vRaw = (Get-Content $versionFile -Raw -ErrorAction SilentlyContinue)
+    if ($vRaw) {
+        $vTrim = $vRaw.Trim()
+        if ($vTrim) { $Global:Suite.Version = $vTrim }
+    }
 }
 
 # ==================== FARBPALETTE ====================
@@ -127,28 +141,31 @@ function Save-SuiteConfig {
     }
 }
 
-# Fragt das neueste GitHub-Release ab und vergleicht es mit der lokalen Version.
-# Bewusst fehler-tolerant: bei Netzfehler oder noch ohne Releases gibt es einfach
-# keinen Hinweis (Rueckgabe $null) - der Update-Check darf den Start nie stoeren.
-# Verglichen wird nur der numerische Versionsteil (v0.18.0-beta -> 0.18.0).
+# Vergleicht die lokale Version mit der VERSION-Datei im main-Branch auf GitHub.
+# Passt zum Auslieferungsmodell der Suite: verteilt wird der main-Branch (via
+# launch.ps1 / irm|iex), nicht getaggte Releases - also wird auch gegen main
+# geprueft. Die VERSION-Datei ist winzig (ein paar Bytes), daher kein spuerbarer
+# Start-Overhead. Bewusst fehler-tolerant: bei Netzfehler einfach kein Hinweis
+# (Rueckgabe $null) - der Update-Check darf den Start nie stoeren.
+# Verglichen wird nur der numerische Versionsteil (0.21.0-beta -> 0.21.0).
 function Test-SuiteUpdate {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $api = "https://api.github.com/repos/$($Global:Suite.RepoSlug)/releases/latest"
-        $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'PUBG-Suite' } -TimeoutSec 4
-        $remoteTag = [string]$rel.tag_name
-        if (-not $remoteTag) { return $null }
-        # Numerischen Teil isolieren: "v0.18.0-beta" -> "0.18.0"
-        $remoteNum = $remoteTag -replace '^v','' -replace '-.*$',''
+        $url = "https://raw.githubusercontent.com/$($Global:Suite.RepoSlug)/main/VERSION"
+        $remoteRaw = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'PUBG-Suite' } -TimeoutSec 4
+        $remoteVer = ([string]$remoteRaw).Trim()
+        if (-not $remoteVer) { return $null }
+        # Numerischen Teil isolieren: "0.21.0-beta" -> "0.21.0"
+        $remoteNum = $remoteVer -replace '^v','' -replace '-.*$',''
         $localNum  = $Global:Suite.Version -replace '^v','' -replace '-.*$',''
         $rv = $null; $lv = $null
         if (-not [version]::TryParse($remoteNum, [ref]$rv)) { return $null }
         if (-not [version]::TryParse($localNum,  [ref]$lv)) { return $null }
         if ($rv -gt $lv) {
-            Write-SuiteLog "Update verfuegbar: $remoteTag (lokal v$($Global:Suite.Version))" 'INFO'
-            return [PSCustomObject]@{ Tag = $remoteTag; Url = [string]$rel.html_url }
+            Write-SuiteLog "Update verfuegbar: $remoteVer (lokal $($Global:Suite.Version))" 'INFO'
+            return [PSCustomObject]@{ Version = $remoteVer }
         }
-        Write-SuiteLog "Update-Check: aktuell (lokal v$($Global:Suite.Version), neuestes Release $remoteTag)"
+        Write-SuiteLog "Update-Check: aktuell (lokal $($Global:Suite.Version), main $remoteVer)"
         return $null
     } catch {
         Write-SuiteLog "Update-Check fehlgeschlagen (unkritisch): $($_.Exception.Message)" 'WARN'
@@ -1039,7 +1056,7 @@ $xamlTemplate = @'
                     <Border Background="@@BgBase@@" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
                         <TextBlock x:Name="lblVersion" Text="v?" FontSize="10" Foreground="@@TextSecondary@@" FontWeight="SemiBold"/>
                     </Border>
-                    <Border x:Name="updateBadge" Background="@@Accent@@" CornerRadius="3" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" Cursor="Hand" ToolTip="Klick: Release-Seite auf GitHub oeffnen">
+                    <Border x:Name="updateBadge" Background="@@Accent@@" CornerRadius="3" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" Cursor="Hand" ToolTip="Klick: Update-Anleitung anzeigen">
                         <TextBlock x:Name="lblUpdate" Text="Update verfuegbar" FontSize="10" Foreground="@@BgBase@@" FontWeight="Bold"/>
                     </Border>
                 </StackPanel>
@@ -3882,16 +3899,22 @@ if ($ctrls.lblAboutVersion) {
     $ctrls.lblAboutVersion.Text = "  -  v$($Global:Suite.Version)"
 }
 
-# Update-Check gegen die GitHub-Releases. Fehler-tolerant (kurzer Timeout,
+# Update-Check gegen den main-Branch. Fehler-tolerant (kurzer Timeout,
 # Exceptions geschluckt) - bei neuer Version erscheint ein klickbares Badge
-# im Header, das die Release-Seite oeffnet.
+# im Header, dessen Klick die Update-Anleitung (irm|iex-Befehl) zeigt.
 $updateInfo = Test-SuiteUpdate
 if ($updateInfo) {
-    $ctrls.lblUpdate.Text = "Update: $($updateInfo.Tag)"
-    $ctrls.updateBadge.Tag = $updateInfo.Url
+    $ctrls.lblUpdate.Text = "Update: $($updateInfo.Version)"
+    $ctrls.updateBadge.Tag = $updateInfo.Version
     $ctrls.updateBadge.Visibility = 'Visible'
     $ctrls.updateBadge.Add_MouseLeftButtonUp({
-        if ($this.Tag) { Start-Process ([string]$this.Tag) }
+        $newV = [string]$this.Tag
+        [System.Windows.MessageBox]::Show(
+            "Neuere Version verfuegbar: $newV   (installiert: v$($Global:Suite.Version))`n`n" +
+            "Zum Aktualisieren diesen Befehl in PowerShell ausfuehren:`n`n" +
+            "irm `"https://raw.githubusercontent.com/$($Global:Suite.RepoSlug)/main/launch.ps1`" | iex`n`n" +
+            "Der Befehl laedt den neuesten Stand und ersetzt die alte Version automatisch.",
+            'Update verfuegbar', 'OK', 'Information') | Out-Null
     })
 }
 
