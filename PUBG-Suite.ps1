@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.23.0-beta'
+    Version    = '0.24.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -825,7 +825,6 @@ function Start-GameMode {
         [bool]$DisableMonitors = $true,
         [bool]$KillRTSS = $true,
         [bool]$KillBackground = $true,
-        [bool]$SetTimerResolution = $false,
         [bool]$LaunchPUBG = $false,
         [scriptblock]$LogCallback
     )
@@ -886,12 +885,7 @@ function Start-GameMode {
         if ($killed -eq 0) { & $LogCallback "Keine Hintergrund-Apps zu killen" 'INFO' }
     }
 
-    # 4. Timer Resolution (optional, falls SetTimerResolution.exe vorhanden)
-    if ($SetTimerResolution) {
-        & $LogCallback "Timer Resolution: PoC noch nicht implementiert" 'WARN'
-    }
-
-    # 5. PUBG launchen
+    # 4. PUBG launchen
     if ($LaunchPUBG) {
         & $LogCallback "Starte PUBG ueber Steam..." 'INFO'
         Start-Process $Global:Suite.PUBGSteamURI
@@ -1436,7 +1430,6 @@ $xamlTemplate = @'
                         <CheckBox x:Name="cbMonitors" Content="Monitore: nur OLED aktiv (Acer XB271HU deaktivieren)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbRTSS" Content="RTSS Prozesse beenden (kritisch fuer Mode 3/1)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbBackground" Content="Hintergrund-Apps schliessen (Chrome, Spotify, Battle.net, Epic, OBS - Discord bleibt fuer Voice)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
-                        <CheckBox x:Name="cbTimer" Content="Timer Resolution 0.5 ms (SetTimerResolutionService - nicht im PoC)" Foreground="@@TextDisabled@@" Margin="0,4" IsEnabled="False"/>
                         <CheckBox x:Name="cbLaunch" Content="PUBG via Steam direkt starten" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="False"/>
                     </StackPanel>
 
@@ -1820,7 +1813,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'btnCapOpenCsv','btnCapOpenFolder','btnCapCompare','btnCapRebuild','btnCapClearHist','lblCapHistInfo','capHistoryList',
     'capCompareCard','btnCapCompareClose','lblCapCompareInfo','capCompareList',
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
-    'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
+    'cbMonitors','cbRTSS','cbBackground','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
     'lblPaths','tbMonitorPattern','lblFooter','lblAboutVersion',
     'lblKeygenArt','lblKeygenCode','lblKeygenStatus','btnKeygenGenerate','btnKeygenMusic','lblKeygenGreetz')) {
     $ctrls[$name] = $window.FindName($name)
@@ -1989,7 +1982,7 @@ $ctrls.btnExitGameMode.Add_Click({
 $ctrls.btnGMStart.Add_Click({
     $cb = { param($m, $l='INFO') Write-GMLog -Msg $m -Level $l }
     Start-GameMode -DisableMonitors $ctrls.cbMonitors.IsChecked -KillRTSS $ctrls.cbRTSS.IsChecked `
-                   -KillBackground $ctrls.cbBackground.IsChecked -SetTimerResolution $ctrls.cbTimer.IsChecked `
+                   -KillBackground $ctrls.cbBackground.IsChecked `
                    -LaunchPUBG $ctrls.cbLaunch.IsChecked -LogCallback $cb
     Update-StatusGrid
 })

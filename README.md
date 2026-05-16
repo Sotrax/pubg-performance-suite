@@ -13,7 +13,7 @@
 Drei Dinge sollten dir klar sein **bevor** du etwas applist:
 
 1. **Open Source**. Jede Zeile ist lesbar in `PUBG-Suite.ps1`. Jeder Tweak listet die exakten Registry-Keys / File-Pfade die geaendert werden (Klick auf "Was wird veraendert? (Details anzeigen)" pro Tweak).
-2. **Vollstaendig reversibel**. Vor jedem Apply wird ein Snapshot der alten Werte in `history.json` gespeichert. Alle 15 Tweaks haben einen 1-Klick-Revert-Button. File-Tweaks (Engine.ini, GameUserSettings.ini) werden vorher in `%LOCALAPPDATA%\PUBGSuite\backups\` als `.bak_<timestamp>` gesichert.
+2. **Vollstaendig reversibel**. Vor jedem Apply wird ein Snapshot der alten Werte in `history.json` gespeichert. 15 der 16 Tweaks haben einen 1-Klick-Revert-Button. File-Tweaks (Engine.ini, GameUserSettings.ini) werden vorher in `%LOCALAPPDATA%\PUBGSuite\backups\` als `.bak_<timestamp>` gesichert.
 3. **BattlEye-safe by design**. Bewusst ausgeschlossen (siehe [Safety](#safety)): Special K, ReShade, DXVK, ban-bait Engine.ini CVars, Process-Lasso auf BEService.exe. Jeder Tweak veraendert entweder Windows-OS-Settings, User-AppData oder User-controllable PUBG-Settings - **keiner haengt sich an den TslGame.exe-Prozess**.
 
 **Was die Suite NICHT tut:** Keine Telemetrie, keine Cloud-Calls, keine "Phone home"-Logik. Internet-Traffic nur:
@@ -50,7 +50,7 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 
 ## Features
 
-### 16 Tweaks - alle einzeln applybar + revertierbar
+### 17 Tweaks - alle einzeln applybar + revertierbar
 
 **Windows (5)**
 - Energieplan: Hoechstleistung
@@ -66,10 +66,11 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 - PUBG FPS-Cap = Monitor-Hz minus 3 (dynamisch berechnet aus Primary-Display)
 - NVIDIA PUBG-Profil via NPI (Low Latency, Power Max, Threaded Optimization etc.) - NPI wird auto-installiert wenn fehlt
 
-**System / Admin (6)**
+**System / Admin (7)**
 - Defender Exclusion fuer PUBG-Pfad
 - Virtualization Security (VBS + HVCI): AUS - inkl. Credential Guard und `bcdedit /set hypervisorlaunchtype off` (kritisch fuer Win11 24H2)
 - Hardware-accelerated GPU Scheduling (HAGS): AN - **Optional**, nicht in "Apply All"
+- Globale Timer-Resolution-Requests: AN - stellt das systemweite Timer-Verhalten her (Win11 macht es pro-Prozess), gegen Frame-Pacing-Ruckler. Reboot noetig, Desktop empfohlen
 - MMCSS Gaming-Profil (SystemResponsiveness 10, NetworkThrottlingIndex off)
 - Game-unfriendly Services disabled (SysMain, WSearch, DiagTrack, MapsBroker)
 - NIC Offloads (RSS, Checksum-Offload, LSO)
@@ -170,7 +171,7 @@ Das laedt herunter, installiert nach `%LOCALAPPDATA%\PUBGSuite\app\`, legt einen
 
 Jeder Apply captured einen **Pre-Change-Snapshot** (Registry-Werte mit Type, File-Copies, Service-States) in `history.json`. Der Apply-Button transformiert nach Erfolg in einen orangenen **Revert**-Button. Klick darauf restored den Pre-Apply-State.
 
-Revert ist unterstuetzt fuer **14 von 15 Tweaks** (NVIDIA-Profile nutzt NPIs eigene Reset-Funktion - derzeit kein automatisierter Revert in der Suite).
+Revert ist unterstuetzt fuer **15 von 16 Tweaks** (NVIDIA-Profile nutzt NPIs eigene Reset-Funktion - derzeit kein automatisierter Revert in der Suite).
 
 ## Architektur
 

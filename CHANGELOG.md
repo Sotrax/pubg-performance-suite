@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.24.0-beta] - 2026-05-16
+### Added
+- **Neuer Tweak „Globale Timer-Resolution-Requests: AN".** Seit Windows 10 v2004
+  / Windows 11 wirkt eine Timer-Resolution-Anforderung (`timeBeginPeriod`) nur
+  noch pro Prozess — andere Prozesse fallen auf 15,625 ms zurück, was
+  Frame-Pacing-Ruckler und bei manchen Engines einen 64-FPS-Deckel verursacht.
+  Der Tweak setzt `GlobalTimerResolutionRequests = 1` unter
+  `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel` und stellt
+  damit das systemweite Verhalten her: die Timer-Anforderung jedes Prozesses
+  (auch PUBG) gilt wieder global. Reboot erforderlich (Kernel liest den Wert
+  beim Start). Voll revertierbar über Registry-Snapshot. Desktop empfohlen —
+  auf Laptop/Akku erhöhter Stromverbrauch. Damit sind es **16 Tweaks**.
+
+### Removed
+- **Timer-Resolution-PoC im „Game Mode"-Tab entfernt.** Die deaktivierte
+  Checkbox „Timer Resolution 0.5 ms (nicht im PoC)", der ungenutzte
+  `SetTimerResolution`-Parameter von `Start-GameMode` und der Stub-Code sind
+  raus. Timer Resolution ist jetzt sauber als Registry-Tweak gelöst (siehe
+  oben) statt über einen residenten Halter-Prozess.
+
 ## [0.23.0-beta] - 2026-05-16
 ### Fixed
 - **Grafik-Tab: ausgewählte Dropdown-Einträge waren nicht lesbar.** Die

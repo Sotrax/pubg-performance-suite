@@ -1103,6 +1103,43 @@ $script:PUBGTweaks = @(
             }
         }
     }
+
+    # ---- Windows: Globale Timer-Resolution-Requests --------------------------
+    [PSCustomObject]@{
+        Id='timerres'; Category='Windows'; Label='Globale Timer-Resolution-Requests: AN'
+        Description='Stellt das systemweite Timer-Verhalten wieder her. Seit Windows 10 v2004 / Windows 11 wirkt eine Timer-Resolution-Anforderung nur noch pro Prozess - andere Prozesse fallen auf 15,625 ms zurueck, was Frame-Pacing-Ruckler und bei manchen Engines einen 64-FPS-Deckel verursacht.'
+        Impact='GERING'
+        ImpactDetail='Desktop empfohlen. Auf Laptop/Akku-Betrieb erhoehter Stromverbrauch - dort weglassen. Greift erst nach Reboot.'
+        RequiresAdmin=$true
+        Changes=@(
+            'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel\GlobalTimerResolutionRequests',
+            'GlobalTimerResolutionRequests = 1 (REG_DWORD)',
+            'Danach wirkt timeBeginPeriod jedes Prozesses (auch PUBG) wieder systemweit',
+            'WICHTIG: greift erst nach REBOOT (Kernel liest den Wert beim Start)'
+        )
+        Check={
+            try {
+                $k = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel'
+                $v = (Get-ItemProperty $k -Name 'GlobalTimerResolutionRequests' -ErrorAction SilentlyContinue).GlobalTimerResolutionRequests
+                if ($v -eq 1) { @{ Status='OK';    CurrentValue='AN';  Detail='' } }
+                else          { @{ Status='TWEAK'; CurrentValue='AUS'; Detail='Globale Timer-Requests aktivieren (Reboot noetig)' } }
+            } catch { @{ Status='SKIP'; CurrentValue='nicht auslesbar'; Detail='' } }
+        }
+        Apply={
+            try {
+                $k = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel'
+                $snap = Get-RegistrySnapshot -Path $k -Name 'GlobalTimerResolutionRequests'
+                if (-not (Test-Path $k)) { New-Item $k -Force -ErrorAction Stop | Out-Null }
+                Set-ItemProperty $k -Name 'GlobalTimerResolutionRequests' -Value 1 -Type DWord -ErrorAction Stop
+                @{ Success=$true; Message='Globale Timer-Requests aktiviert - Reboot erforderlich'; Snapshot=$snap }
+            } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
+        }
+        Revert={
+            param($Snapshot)
+            if (Restore-RegistrySnapshot $Snapshot) { @{ Success=$true; Message='Globale Timer-Requests zurueckgesetzt - Reboot erforderlich' } }
+            else { @{ Success=$false; Message='Revert fehlgeschlagen' } }
+        }
+    }
 )
 
 # ===========================================================================
