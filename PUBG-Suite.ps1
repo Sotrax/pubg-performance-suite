@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.26.0-beta'
+    Version    = '0.27.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -365,6 +365,16 @@ function Get-LiveStatus {
         $s['FPS-Cap'] = @{ Value='GameUserSettings.ini fehlt'; Status='SKIP' }
     }
 
+    # G-Sync: VRR ist die Voraussetzung fuer tearing-freies Spielen ohne
+    # V-Sync-Latenz. Stamp wird vom 'gsync'-Tweak gesetzt. Ob VRR im Monitor-OSD
+    # aktiv ist, kann die Suite nicht pruefen - daher der OSD-Hinweis.
+    $gsyncStamp = "$env:LOCALAPPDATA\PUBGDiag\gsync-applied.stamp"
+    if (Test-Path $gsyncStamp) {
+        $s['G-Sync'] = @{ Value='aktiviert (VRR im Monitor-OSD pruefen)'; Status='OK' }
+    } else {
+        $s['G-Sync'] = @{ Value='nicht aktiviert'; Status='WARN' }
+    }
+
     # NPI Stamp
     if (Test-Path $Global:Suite.NPIStamp) {
         $age = (Get-Date) - (Get-Item $Global:Suite.NPIStamp).LastWriteTime
@@ -402,6 +412,35 @@ function Get-LiveStatus {
             Select-Object -First 1
         $s['GPU'] = if ($gpu) { @{ Value=($gpu.Name -replace 'NVIDIA GeForce ','' -replace 'AMD ',''); Status='INFO' } } else { @{ Value='?'; Status='SKIP' } }
     } catch { $s['GPU'] = @{ Value='?'; Status='SKIP' } }
+
+    # GPU-Treiber: Version (via nvidia-smi, sonst Win32) + Alter. Ein echter
+    # "neueste Version?"-Online-Abgleich ist nicht zuverlaessig moeglich (keine
+    # offizielle API) - daher altersbasiert: WARN ab 90 Tagen.
+    try {
+        $drvVer = $null; $drvDate = $null
+        $nvSmiCmd = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+        if ($nvSmiCmd) {
+            try { $drvVer = (& nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1) } catch {}
+            if ($drvVer) { $drvVer = $drvVer.Trim() }
+        }
+        $vc = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'NVIDIA|GeForce|RTX|GTX|Radeon RX' } | Select-Object -First 1
+        if (-not $drvVer -and $vc -and $vc.DriverVersion) { $drvVer = $vc.DriverVersion }
+        if ($vc -and $vc.DriverDate) {
+            try { $drvDate = [Management.ManagementDateTimeConverter]::ToDateTime($vc.DriverDate) } catch {}
+        }
+        if ($drvVer) {
+            if ($drvDate) {
+                $ageDays = [int]((Get-Date) - $drvDate).TotalDays
+                $st = if ($ageDays -gt 90) { 'WARN' } else { 'OK' }
+                $s['GPU-Treiber'] = @{ Value="$drvVer ($ageDays d alt)"; Status=$st }
+            } else {
+                $s['GPU-Treiber'] = @{ Value="$drvVer"; Status='INFO' }
+            }
+        } else {
+            $s['GPU-Treiber'] = @{ Value='nicht auslesbar'; Status='SKIP' }
+        }
+    } catch { $s['GPU-Treiber'] = @{ Value='?'; Status='SKIP' } }
 
     # CPU - Marketing-Suffixe abkuerzen damit der Name in die Card passt
     try {
@@ -1774,6 +1813,28 @@ $xamlTemplate = @'
                             </StackPanel>
                         </Border>
 
+                        <!-- VRR / OLED-Empfehlungen Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Monitor-OSD &amp; VRR (OLED) - Empfehlungen" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"
+                                           Text="Diese Einstellungen kann die Suite NICHT setzen - sie liegen im Monitor-OSD bzw. der NVIDIA-Systemsteuerung. Ziel: tearing-frei + minimale Latenz + kein OLED-Flicker."/>
+                                <TextBlock Foreground="@@TextPrimary@@" FontSize="11" TextWrapping="Wrap" LineHeight="18">
+                                    <Run Text="Monitor-OSD:" FontWeight="Bold" Foreground="@@Accent@@"/><LineBreak/>
+                                    <Run Text="  - VRR / Adaptive-Sync: EIN  (zwingend fuer G-Sync)"/><LineBreak/>
+                                    <Run Text="  - OLED Anti-Flicker: OFF  - NICHT Middle/High: die kappen die VRR-Range (80- bzw. 140-240 Hz); fallen die FPS darunter, gibt es Tearing/Stutter. 'Off' = volle 48-240 Hz + LFC."/><LineBreak/>
+                                    <Run Text="  - Uniform Brightness: EIN  - konstante Helligkeit, kein ABL-Pumpen"/><LineBreak/>
+                                    <Run Text="  - HDR: AUS (SDR) fuer Competitive - HDR verstaerkt VRR-Flicker"/><LineBreak/>
+                                    <Run Text="NVIDIA-Systemsteuerung:" FontWeight="Bold" Foreground="@@Accent@@"/><LineBreak/>
+                                    <Run Text="  - 'G-SYNC einrichten': aktivieren, fuer Vollbildmodus + Haekchen 'Einstellungen fuer das ausgewaehlte Anzeigemodell aktivieren'"/><LineBreak/>
+                                    <Run Text="  - NVIDIA Smooth Motion (RTX 50): AUS - Frame-Gen kostet Latenz"/><LineBreak/>
+                                    <Run Text="  - V-Sync = Ein, FPS-Cap, Low Latency = Aus  (setzt der 'NVIDIA PUBG-Profil'-Tweak bereits)"/><LineBreak/>
+                                    <Run Text="In PUBG:" FontWeight="Bold" Foreground="@@Accent@@"/><LineBreak/>
+                                    <Run Text="  - Exklusiv-Vollbild, In-Game-V-Sync AUS, FPS-Cap Display-Based"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Tools Pfade Card -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -1970,6 +2031,8 @@ function Update-StatusGrid {
     if ($live['NV Profil'].Status -ne 'OK')    { $recos += @{ Sev='WARN'; Title='NVIDIA Profile nicht applied'; Detail='Reflex + Power Mgmt + Threaded Optim. nicht via NPI gesetzt. Tweak: "NVIDIA Profile"'; TabIdx=1 } }
     if ($live['Defender'].Status -eq 'WARN')   { $recos += @{ Sev='WARN'; Title='Defender ohne PUBG-Exclusion'; Detail='Realtime-Scan auf PUBG-Files kostet I/O. Tweak: "Defender Exclusion"'; TabIdx=1 } }
     if ($live['FPS-Cap'] -and $live['FPS-Cap'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='FPS-Cap nicht vollstaendig'; Detail='In-Game-Cap auf Display-Based (Monitor-Hz) setzen UND das NVIDIA-Profil anwenden - der scharfe Cap (Hz-3) laeuft ueber den Treiber-Limiter. Tweaks: "PUBG In-Game FPS-Cap" + "NVIDIA PUBG-Profil"'; TabIdx=1 } }
+    if ($live['G-Sync'] -and $live['G-Sync'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='G-Sync nicht aktiviert'; Detail='G-Sync/VRR ist die Voraussetzung fuer tearing-freies Spielen ohne V-Sync-Latenz. Tweak: "G-Sync aktivieren" - danach im Monitor-OSD VRR/Adaptive-Sync einschalten.'; TabIdx=1 } }
+    if ($live['GPU-Treiber'] -and $live['GPU-Treiber'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='GPU-Treiber aelter als 90 Tage'; Detail='Aktuellen NVIDIA-Treiber via NVIDIA App installieren - neuere Treiber bringen oft Game-Ready-Optimierungen und VRR-/Flip-Fixes. (Manuell - die Suite aktualisiert keine Treiber.)'; TabIdx=0 } }
 
     $ctrls.recoList.Children.Clear()
     if ($recos.Count -eq 0) {
@@ -2031,7 +2094,7 @@ function Update-StatusGrid {
     }
 
     # Top-Status: nur Tweak-relevante Checks zaehlen, nicht INFO (PUBG/GPU/CPU/Display)
-    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender','FPS-Cap')
+    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender','FPS-Cap','G-Sync')
     $okCount = 0; $totalCount = 0
     foreach ($k in $tweakKeys) {
         if ($live[$k]) {
@@ -2174,9 +2237,33 @@ function Update-DetectedHardware {
         $vramTxt = "  ($([math]::Round($dGpu.AdapterRAM / 1GB, 1)) GB VRAM)"
     }
 
+    # GPU-Treiber: Version (nvidia-smi) + Datum (Win32) fuer eine Alters-Anzeige
+    $drvTxt = '?'
+    try {
+        $drvVer = $null
+        if ($dGpu -and ($dGpu.Name -match 'NVIDIA|GeForce|RTX|GTX')) {
+            $nvSmi2 = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+            if ($nvSmi2) {
+                try { $drvVer = (& nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1) } catch {}
+                if ($drvVer) { $drvVer = $drvVer.Trim() }
+            }
+        }
+        if (-not $drvVer -and $dGpu -and $dGpu.DriverVersion) { $drvVer = $dGpu.DriverVersion }
+        if ($drvVer) {
+            $drvTxt = $drvVer
+            if ($dGpu -and $dGpu.DriverDate) {
+                try {
+                    $dd = [Management.ManagementDateTimeConverter]::ToDateTime($dGpu.DriverDate)
+                    $drvTxt += "  (vom $($dd.ToString('yyyy-MM-dd')), $([int]((Get-Date) - $dd).TotalDays) Tage alt)"
+                } catch {}
+            }
+        }
+    } catch {}
+
     $ctrls.lblDetectedHw.Text = @"
 CPU:             $cpu
 GPU:             $gpuName$vramTxt
+GPU-Treiber:     $drvTxt
 RAM:             $ram GB
 Monitor (Hz):    $hz Hz  (In-Game-Cap: $hz / NVIDIA-Treiber-Cap: $cap)
 Aktive Displays: $([System.Windows.Forms.Screen]::AllScreens.Count) (vom DWM genutzt)

@@ -49,33 +49,57 @@ if ([string]::IsNullOrWhiteSpace($script:RegLocalAppData)) {
 $script:RegBackupDir  = Join-Path $script:RegLocalAppData 'PUBGSuite\backups'
 $script:RegLogDir     = Join-Path $script:RegLocalAppData 'PUBGSuite\logs'
 $script:NpiStampPath  = Join-Path $script:RegLocalAppData 'PUBGDiag\npi-applied.stamp'
+$script:GSyncStampPath = Join-Path $script:RegLocalAppData 'PUBGDiag\gsync-applied.stamp'
 $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 
 # NVIDIA PUBG-Profil: Profilname + die Treiber-Settings. Modul-Scope, damit
 # Apply (Invoke-NPIPubgProfile) und Revert (Revert-NPIPubgProfile) GENAU dieselbe
 # Liste nutzen - eine einzige Quelle fuer Setzen und Zuruecksetzen.
 #
-# Setting-IDs gegen die offizielle nvidiaProfileInspector-Referenz verifiziert
-# (nvidiaProfileInspector/CustomSettingNames.xml, Orbmu2k/nvidiaProfileInspector):
+# Setting-IDs + Werte gegen die offizielle nvidiaProfileInspector-Referenz
+# verifiziert (nvidiaProfileInspector/CustomSettingNames.xml, Orbmu2k):
 #   0x10835002 = Frame Rate Limiter V3   (Wert = FPS als DWORD, z.B. 237 = 0xED)
-#   0x10835000 = Ultra Low Latency - Enabled  (Bool: 0=Off, 1=On)
-#   0x0005F543 = Ultra Low Latency - CPL State (0=Off,1=On,2=Ultra - NVCP-Anzeige)
-# Frueher (bis 0.25.0-beta) stand hier faelschlich 0x10835013 fuer den Limiter -
-# diese ID existiert nicht, der Treiber-FPS-Cap wurde dadurch NIE gesetzt.
+#   0x00A879CF = Vertical Sync           (Off=0x08416747, On=0x47814940)
+#   0x10835000 = Ultra Low Latency       (Bool: 0=Off, 1=On)
+#
+# Aenderungen ggue. <=0.26.0-beta (G-SYNC-101-konform, doppelt recherchiert):
+#  - Vertical Sync: war 0x00000000 (KEIN gueltiger Wert fuer dieses Setting!) ->
+#    0x47814940 (On). Bei aktivem G-Sync + FPS-Cap unter Refresh fuegt V-Sync=On
+#    KEINE Latenz hinzu, dient nur als Tearing-Fallback (Blur Busters G-SYNC 101).
+#  - Ultra Low Latency: war 1 (On) -> 0 (Off). PUBG hat keinen Reflex; der
+#    manuelle FPS-Cap ist wirksamer als ULL. ULL Ultra setzt zudem einen eigenen
+#    Auto-Cap (~224 FPS @240Hz), der den 237er-Cap unterbieten wuerde, und kann
+#    in CPU-bound Szenen (PUBG) Latenz sogar erhoehen.
+#  - CPL-State 0x0005F543 entfernt (mit ULL=Off gegenstandslos).
 #
 # Dynamic='FpsCap': Val wird erst beim Apply aus Get-OptimalFpsCap (Monitor-Hz
 # minus 3) berechnet - eine einzige Quelle fuer den Cap-Wert, kein Hardcoding.
 $script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
 $script:NpiPubgSettings = @(
     @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
-    @{ Id='0x00A879CF'; Val='0x00000000'; Desc='Vertical Sync = Force OFF' }
+    @{ Id='0x00A879CF'; Val='0x47814940'; Desc='Vertical Sync = ON (G-SYNC-101: Tearing-Fallback, keine Latenz bei Cap unter Refresh)' }
     @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
     @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
-    @{ Id='0x10835000'; Val='0x00000001'; Desc='Ultra Low Latency = Enabled' }
-    @{ Id='0x0005F543'; Val='0x00000002'; Desc='Ultra Low Latency CPL-State = Ultra (NVCP-Anzeige)' }
+    @{ Id='0x10835000'; Val='0x00000000'; Desc='Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer)' }
     @{ Id='0x10835002'; Val=$null; Dynamic='FpsCap'; Desc='Frame Rate Limiter V3 = Monitor-Hz minus 3' }
     @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
     @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
+)
+
+# G-Sync-Settings (eigener Tweak). Werden via NVPI ins PUBG-Profil geschrieben.
+# IDs + Werte gegen nvidiaProfileInspector/CustomSettingNames.xml verifiziert:
+#   0x1094F157 GSYNC Global Feature    (0=Off, 1=On)
+#   0x1094F1F7 GSYNC Global Mode       (0=Off, 1=Fullscreen only, 2=FS+Windowed)
+#   0x1194F158 GSYNC Application Mode  (0=Off, 1=Fullscreen only, 2=FS+Windowed)
+#   0x10A879CF GSYNC Application State (0=Allow, 1=Force Off, 2=Disallow)
+# PUBG laeuft im Exklusiv-Vollbild -> 'Fullscreen only' genuegt und ist die
+# latenzaermste Wahl. Hinweis: greift nur, wenn im Monitor-OSD VRR/Adaptive-Sync
+# aktiv ist; ggf. zusaetzlich der G-SYNC-Master-Schalter in der NVIDIA-Systemsteuerung.
+$script:NpiGSyncSettings = @(
+    @{ Id='0x1094F157'; Val='0x00000001'; Desc='G-SYNC Global Feature = On' }
+    @{ Id='0x1094F1F7'; Val='0x00000001'; Desc='G-SYNC Global Mode = Fullscreen only' }
+    @{ Id='0x1194F158'; Val='0x00000001'; Desc='G-SYNC Application Mode = Fullscreen only' }
+    @{ Id='0x10A879CF'; Val='0x00000000'; Desc='G-SYNC Application State = Allow' }
 )
 
 # ===========================================================================
@@ -377,6 +401,44 @@ function Revert-NPIPubgProfile {
         Remove-Item $script:NpiStampPath -Force -ErrorAction SilentlyContinue
     }
     Write-RegLog "NPI Revert: $ok deleteProfileSetting ok, $fail fail"
+    return ($ok -gt 0 -and $fail -eq 0)
+}
+
+# Schreibt die G-Sync-Settings via NVPI ins PUBG-Profil. Eigener Stamp, damit
+# G-Sync unabhaengig vom uebrigen NV-Profil getoggelt werden kann.
+function Invoke-NPIGSync {
+    param([string]$NpiPath)
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
+    $ok = 0; $fail = 0
+    foreach ($s in $script:NpiGSyncSettings) {
+        try {
+            $null = & $NpiPath '-setProfileSetting' $script:NpiPubgProfileName $s.Id $s.Val 2>&1
+            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
+        } catch { $fail++ }
+    }
+    try {
+        $sd = Split-Path $script:GSyncStampPath -Parent
+        if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
+        Get-Date | Out-File $script:GSyncStampPath -Force
+    } catch {}
+    Write-RegLog "NPI G-Sync Apply: $ok ok, $fail fail"
+    return ($ok -gt 0 -and $fail -eq 0)
+}
+
+function Revert-NPIGSync {
+    param([string]$NpiPath)
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
+    $ok = 0; $fail = 0
+    foreach ($s in $script:NpiGSyncSettings) {
+        try {
+            $null = & $NpiPath '-deleteProfileSetting' $script:NpiPubgProfileName $s.Id 2>&1
+            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
+        } catch { $fail++ }
+    }
+    if (Test-Path $script:GSyncStampPath) {
+        Remove-Item $script:GSyncStampPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-RegLog "NPI G-Sync Revert: $ok deleteProfileSetting ok, $fail fail"
     return ($ok -gt 0 -and $fail -eq 0)
 }
 
@@ -1112,10 +1174,10 @@ $script:PUBGTweaks = @(
             'Tool: NVIDIA Profile Inspector (Auto-Install nach C:\Tools\nvidiaProfileInspector\)',
             "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS",
             'Power Management Mode = Prefer Max Performance',
-            'Vertical Sync = Force OFF',
+            'Vertical Sync = ON (G-SYNC-101: Tearing-Fallback, keine Latenz solange Cap unter Refresh)',
             'Texture Filtering Quality = High Performance',
             'Threaded Optimization = ON',
-            'Ultra Low Latency = Enabled (Reflex-equivalent)',
+            'Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer; ULL kann CPU-bound Latenz erhoehen)',
             'Frame Rate Limiter V3 = Monitor-Hz minus 3 (dynamisch, der eigentliche Competitive-FPS-Cap)',
             'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp',
             'Revert: entfernt die Profil-Werte wieder (NPI -deleteProfileSetting -> Treiber-Default)'
@@ -1162,6 +1224,64 @@ $script:PUBGTweaks = @(
                 @{ Success=$true; Message="NVIDIA PUBG-Profil zurueckgesetzt ($($script:NpiPubgSettings.Count) Werte auf Treiber-Default)" }
             } else {
                 @{ Success=$false; Message='NPI-Revert teilweise fehlgeschlagen - ggf. via NVIDIA-Systemsteuerung "Wiederherstellen"' }
+            }
+        }
+    }
+
+    # ---- GPU: G-Sync aktivieren ----------------------------------------------
+    # Setzt die G-Sync-Settings via NVPI ins PUBG-Profil (Fullscreen only).
+    # G-Sync ist die Voraussetzung fuer tearing-freies Spielen OHNE V-Sync-Latenz:
+    # zusammen mit dem FPS-Cap unter Refresh (Tweak 'nvprofile') bleibt die
+    # Framerate im VRR-Fenster -> kein Tearing, kein Stutter, minimale Latenz.
+    [PSCustomObject]@{
+        Id='gsync'; Category='GPU'; Label='G-Sync aktivieren (VRR, tearing-frei)'
+        Description='Aktiviert G-Sync/VRR fuer PUBG via NVIDIA Profile Inspector - Voraussetzung fuer tearing-freies Spielen ohne V-Sync-Latenz'
+        Impact='KEIN'; ImpactDetail='Benoetigt einen G-Sync-(Compatible-)Monitor mit aktiver VRR/Adaptive-Sync-Einstellung im Monitor-OSD'
+        RequiresAdmin=$false
+        Changes=@(
+            'Tool: NVIDIA Profile Inspector',
+            "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS",
+            'G-SYNC Global Feature = On',
+            'G-SYNC Global Mode = Fullscreen only',
+            'G-SYNC Application Mode = Fullscreen only',
+            'G-SYNC Application State = Allow',
+            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\gsync-applied.stamp',
+            'Voraussetzung: VRR/Adaptive-Sync im Monitor-OSD aktiv; ggf. G-SYNC-Master-Schalter in der NVIDIA-Systemsteuerung'
+        )
+        Check={
+            if (Test-Path $script:GSyncStampPath) {
+                $age = (Get-Date) - (Get-Item $script:GSyncStampPath).LastWriteTime
+                return @{ Status='OK'; CurrentValue="aktiviert vor $([int]$age.TotalDays) Tagen"
+                          Detail='Bestaetigung: G-SYNC-Indikator in der NVIDIA-Systemsteuerung einschalten' }
+            }
+            @{ Status='TWEAK'; CurrentValue='nicht aktiviert'; Detail='G-Sync fuer PUBG aktivieren' }
+        }
+        Apply={
+            try {
+                $npi = Get-NPIPath
+                if (-not $npi) {
+                    $npi = Install-NPIFromGitHub
+                    if (-not $npi) { return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht installiert werden'; Snapshot=$null } }
+                }
+                if (Invoke-NPIGSync -NpiPath $npi) {
+                    @{ Success=$true
+                       Message='G-Sync fuer PUBG aktiviert. WICHTIG: im Monitor-OSD VRR/Adaptive-Sync einschalten; zur Kontrolle den G-SYNC-Indikator in der NVIDIA-Systemsteuerung aktivieren.'
+                       Snapshot=@{ Method='npi-deleteProfileSetting'; SettingCount=$script:NpiGSyncSettings.Count; AppliedAt=(Get-Date).ToString('o') } }
+                } else {
+                    @{ Success=$false; Message='G-Sync-Settings konnten nicht gesetzt werden (NVPI-Fehler)'; Snapshot=$null }
+                }
+            } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
+        }
+        Revert={
+            param($Snapshot)
+            $npi = Get-NPIPath
+            if (-not $npi) {
+                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - G-Sync-Werte manuell via NVIDIA-Systemsteuerung zuruecksetzen' }
+            }
+            if (Revert-NPIGSync -NpiPath $npi) {
+                @{ Success=$true; Message='G-Sync-Profilwerte zurueckgesetzt (auf Treiber-Default)' }
+            } else {
+                @{ Success=$false; Message='G-Sync-Revert teilweise fehlgeschlagen' }
             }
         }
     }
