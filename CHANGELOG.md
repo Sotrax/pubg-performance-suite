@@ -10,6 +10,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.28.0-beta] - 2026-05-17
+Behebt alle 7 Bugs aus `BUGREPORT_v0.27.0-beta_DIAG_VERIFIED.md` (Diag-Bundle
+`pubg-suite-diag-20260516`).
+
+### Fixed
+- **CRITICAL (Bug #1/#2): Der FPS-Cap wurde falsch und unvollständig gesetzt.**
+  Der Tweak `fpscap` schrieb `FrameRateLimit` = volle Monitor-Hz (z. B. 240
+  statt 237) und ließ PUBGs zweiten, in der Praxis wirksamen Cap
+  `InGameCustomFrameRateLimit` (Sektion `[/Script/TslGame.TslGameUserSettings]`)
+  komplett unangetastet — das Diag-Bundle zeigte ihn auf `242.56`, was die
+  gemessenen 240–242 FPS erklärt. **Neu:** `fpscap` berechnet den
+  Competitive-Cap als Monitor-Hz minus `FpsCapOffset` (Default 3, min. 60 FPS)
+  und schreibt **beide** Caps — `FrameRateLimit` in
+  `[/Script/Engine.GameUserSettings]` **und** `InGameCustomFrameRateLimit` in
+  der TslGame-Sektion — plus `InGameFrameRateLimitType=Customizable` und
+  `bUseInGameSmoothedFrameRate=False`. Ein vor 0.28 fälschlich in die
+  TslGame-Sektion geschriebener `FrameRateLimit`-Key wird beim Apply entfernt.
+- **HIGH (Bug #3): Die Apply-Log-Meldung von `fpscap` war falsch.** Sie behauptete
+  „scharfer Cap via NVIDIA-Profil", obwohl in Wahrheit die
+  `GameUserSettings.ini` geschrieben wurde. Die Meldung nennt jetzt den echten
+  Mechanismus (FrameRateLimit + InGameCustomFrameRateLimit, Monitor-Hz minus
+  Offset).
+- **HIGH (Bug #4): Der NVPI-Pfad (G-Sync + nvprofile) scheiterte komplett.**
+  `-exportCustomized` lief mit ExitCode 0 und erzeugte keine `.nip`, worauf der
+  gesamte Read-Modify-Write abbrach — es wurde **kein** Treiber-Setting
+  geschrieben (weder G-Sync noch Power/Latency). Ursache: `-exportCustomized`
+  exportiert nur *angepasste* Profile; gibt es noch keine, ist das kein Fehler,
+  sondern der sichere Leer-Fall. **Neu:** dieser Fall wird als „nichts zu
+  bewahren, frisch schreiben" behandelt statt als fataler Fehler; echte
+  Export-Fehler (ExitCode ≠ 0) bleiben Fehler. Zusätzlich **Post-Import-
+  Verifikation**: nach dem `.nip`-Import liest die Suite den Treiber per
+  Re-Export zurück und bestätigt jeden Wert — nur dann gilt der Tweak als
+  angewandt, sonst ehrliche Fehlermeldung statt falschem „angewandt"-Stamp.
+  Echtes Logging (NPI-Version, ExitCode, stdout/stderr) bleibt. Der
+  NVPI-Quellcode (`DrsImportService.ImportProfiles`) wurde geprüft:
+  `-silentImport` *resettet + ersetzt* jedes Profil der `.nip` (kein Merge) —
+  der Read-Modify-Write ist daher zwingend und bleibt erhalten.
+- **NVPI-Auto-Installer zog dauerhaft eine veraltete Version.** Der Installer
+  fragte `releases/latest` ab — dort ist beim Maintainer eine ältere 2.4er
+  gepinnt, obwohl 3.x existiert. Jetzt wird die höchste Versionsnummer mit
+  ZIP-Asset aus der Release-Liste gewählt.
+- **MEDIUM (Bug #5): Zu kurze Captures wurden als Fehler/leerer Slot
+  behandelt.** Ein Capture mit zu wenigen Frames wird jetzt als *Abbruch*
+  (Log-Level `WARN`, mit Frame-Anzahl) gewertet, gelb statt rot angezeigt und
+  **nicht** in die Capture-History geschrieben.
+- **LOW (Bug #6): `defender`-Apply meldete bei bereits gesetzter Exclusion
+  inkonsistent.** Ist die PUBG-Exclusion schon vorhanden, gilt das jetzt
+  sofort als Erfolg. Nach `Add-MpPreference` wird die Exclusion-Liste
+  zurückgelesen und verifiziert.
+- **LOW (Bug #7): Engine.ini-Relikt `r.setres` entfernt.** Der `engineini`-
+  Apply entfernt jetzt einen `r.setres`-Eintrag aus `[SystemSettings]`, der
+  eine feste (z. B. 720p-)Auflösung erzwang und `ResolutionSizeX/Y` aus
+  GameUserSettings widersprach. Der Check meldet das Relikt als `TWEAK`.
+
+### Changed
+- **`nvprofile`: Frame Rate Limiter V3 entfernt.** Der FPS-Cap läuft seit
+  0.28 ausschließlich über `fpscap` (PUBG-eigene INI) — ein einziger,
+  verifizierter Mechanismus statt eines auf aktuellen Treibern wirkungslosen
+  NVPI-Limiters. `nvprofile` setzt weiterhin Power Management, V-Sync-Fallback,
+  Texture/Threading und Ultra Low Latency.
+
+### Added
+- **`FpsCapOffset` in `config/PUBGProfile.psd1`** (Default 3). Steuert den
+  Competitive-Cap-Abstand zur Refresh-Rate (Blur-Busters-G-SYNC-101-Richtwert),
+  ohne Code-Änderung. `ProfileVersion` → 1.1.
+
 ## [0.27.0-beta] - 2026-05-16
 ### Fixed
 - **CRITICAL: Die gesamte NVIDIA-Automatik hat nie funktioniert.** Die Suite

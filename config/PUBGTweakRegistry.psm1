@@ -58,7 +58,6 @@ $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 #
 # Setting-IDs + Werte gegen die offizielle nvidiaProfileInspector-Referenz
 # verifiziert (nvidiaProfileInspector/CustomSettingNames.xml, Orbmu2k):
-#   0x10835002 = Frame Rate Limiter V3   (Wert = FPS als DWORD, z.B. 237 = 0xED)
 #   0x00A879CF = Vertical Sync           (Off=0x08416747, On=0x47814940)
 #   0x10835000 = Ultra Low Latency       (Bool: 0=Off, 1=On)
 #
@@ -68,12 +67,16 @@ $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 #    KEINE Latenz hinzu, dient nur als Tearing-Fallback (Blur Busters G-SYNC 101).
 #  - Ultra Low Latency: war 1 (On) -> 0 (Off). PUBG hat keinen Reflex; der
 #    manuelle FPS-Cap ist wirksamer als ULL. ULL Ultra setzt zudem einen eigenen
-#    Auto-Cap (~224 FPS @240Hz), der den 237er-Cap unterbieten wuerde, und kann
+#    Auto-Cap (~224 FPS @240Hz), der den ini-Cap unterbieten wuerde, und kann
 #    in CPU-bound Szenen (PUBG) Latenz sogar erhoehen.
 #  - CPL-State 0x0005F543 entfernt (mit ULL=Off gegenstandslos).
 #
-# Dynamic='FpsCap': Val wird erst beim Apply aus Get-OptimalFpsCap (Monitor-Hz
-# minus 3) berechnet - eine einzige Quelle fuer den Cap-Wert, kein Hardcoding.
+# Aenderung ggue. 0.27.0-beta: Frame Rate Limiter V3 (0x10835002) ENTFERNT.
+# Der Competitive-FPS-Cap wird seit 0.28.0-beta vom Tweak 'fpscap' direkt in
+# PUBGs GameUserSettings.ini geschrieben (FrameRateLimit + InGameCustom-
+# FrameRateLimit). Diag-Bundle pubg-suite-diag-20260516 hat belegt, dass der
+# NVPI-Pfad auf aktuellen Treibern wirkungslos ist; der ini-Cap ist die
+# verifizierte, einzige Quelle des Caps - kein doppelter Mechanismus.
 $script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
 $script:NpiPubgSettings = @(
     @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
@@ -81,7 +84,6 @@ $script:NpiPubgSettings = @(
     @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
     @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
     @{ Id='0x10835000'; Val='0x00000000'; Desc='Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer)' }
-    @{ Id='0x10835002'; Val=$null; Dynamic='FpsCap'; Desc='Frame Rate Limiter V3 = Monitor-Hz minus 3' }
     @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
     @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
 )
@@ -283,6 +285,76 @@ function Update-IniValue {
     }
 }
 
+# Liest den Wert eines Keys aus einer bestimmten INI-Sektion (section-aware,
+# anders als ein globales Datei-Grep). Gibt den getrimmten Wert zurueck oder
+# $null, wenn Sektion/Key/Datei fehlen.
+function Get-IniValue {
+    param([string]$Path, [string]$Section, [string]$Key)
+    if (-not (Test-Path $Path)) { return $null }
+    try {
+        $content = Get-Content -Path $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-RegLog "Get-IniValue: Read-Fehler $($_.Exception.Message)" 'WARN'
+        return $null
+    }
+    if ([string]::IsNullOrEmpty($content)) { return $null }
+    $secPattern = "(?ms)^\[" + [regex]::Escape($Section) + "\]\s*\r?\n(.*?)(?=^\[|\z)"
+    if ($content -notmatch $secPattern) { return $null }
+    $body = $matches[1]
+    if ($body -match ("(?m)^\s*" + [regex]::Escape($Key) + "\s*=\s*(.*?)\s*$")) {
+        return $matches[1]
+    }
+    return $null
+}
+
+# Entfernt einen Key aus einer INI-Sektion. $true = Key ist (jetzt) weg, auch
+# wenn er nie da war; $false nur bei echtem Read-/Write-Fehler. Read-only-
+# Attribut wird - wie bei Update-IniValue - temporaer geloest und danach
+# wiederhergestellt.
+function Remove-IniKey {
+    param([string]$Path, [string]$Section, [string]$Key)
+    if (-not (Test-Path $Path)) { return $true }
+    try {
+        $content = Get-Content -Path $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-RegLog "Remove-IniKey: Read-Fehler $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+    if ([string]::IsNullOrEmpty($content)) { return $true }
+    $secPattern = "(?ms)^\[" + [regex]::Escape($Section) + "\]\s*\r?\n(.*?)(?=^\[|\z)"
+    if ($content -notmatch $secPattern) { return $true }
+    $body = $matches[1]
+    $keyPattern = "(?m)^[ \t]*" + [regex]::Escape($Key) + "[ \t]*=.*\r?\n?"
+    if ($body -notmatch $keyPattern) { return $true }
+    $newBody = $body -replace $keyPattern, ''
+    $newContent = $content -replace $secPattern, ("[$Section]`r`n" + $newBody)
+    if ([string]::IsNullOrWhiteSpace($newContent) -or $newContent.Length -lt 5) {
+        Write-RegLog "Remove-IniKey: Berechnetes Content zu klein/leer - kein Write" 'ERROR'
+        return $false
+    }
+    $wasReadOnly = $false
+    try {
+        $fi = Get-Item $Path -Force
+        if (($fi.Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+            $fi.Attributes = $fi.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+            $wasReadOnly = $true
+        }
+    } catch {}
+    try {
+        Set-Content -Path $Path -Value $newContent -NoNewline -Encoding UTF8 -ErrorAction Stop
+        if ($wasReadOnly) {
+            try {
+                $fi2 = Get-Item $Path -Force
+                $fi2.Attributes = $fi2.Attributes -bor [System.IO.FileAttributes]::ReadOnly
+            } catch {}
+        }
+        return $true
+    } catch {
+        Write-RegLog "Remove-IniKey: Write-Fehler $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+}
+
 function Get-PUBGEnginePath   { "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\Engine.ini" }
 function Get-PUBGGameUserPath { "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini" }
 
@@ -297,7 +369,33 @@ function Get-PrimaryMonitorHz {
     return 240
 }
 
-function Get-OptimalFpsCap { (Get-PrimaryMonitorHz) - 3 }
+# Liest FpsCapOffset aus config\PUBGProfile.psd1 - dieselbe Single-Source, die
+# Suite und Diagnose nutzen. PUBGProfile.psd1 liegt im selben Ordner wie dieses
+# Modul ($PSScriptRoot). Faellt bei fehlender/fehlerhafter Datei auf 3 zurueck
+# (Blur-Busters-G-SYNC-101-Richtwert). Wird via Import-PowerShellDataFile
+# geladen - parst nur Daten, fuehrt keinen Code aus.
+function Get-FpsCapOffset {
+    try {
+        $profilePath = Join-Path $PSScriptRoot 'PUBGProfile.psd1'
+        if (Test-Path $profilePath) {
+            $pd = Import-PowerShellDataFile -Path $profilePath -ErrorAction Stop
+            if ($null -ne $pd.FpsCapOffset) {
+                $o = [int]$pd.FpsCapOffset
+                if ($o -ge 0 -and $o -le 60) { return $o }
+                Write-RegLog "Get-FpsCapOffset: Wert $o ausserhalb 0..60 - Fallback 3" 'WARN'
+            }
+        }
+    } catch {
+        Write-RegLog "Get-FpsCapOffset: $($_.Exception.Message) - Fallback 3" 'WARN'
+    }
+    return 3
+}
+
+# Competitive-FPS-Cap = Refresh-Rate minus Offset, harte Untergrenze 60 FPS.
+function Get-CompetitiveFpsCap {
+    param([int]$RefreshRate, [int]$Offset = 3)
+    [Math]::Max(60, $RefreshRate - $Offset)
+}
 
 function Get-NPIPath {
     $candidates = @(
@@ -317,11 +415,21 @@ function Get-NPIPath {
 function Install-NPIFromGitHub {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Write-RegLog 'NPI-Install: hole Release-Info von GitHub...'
-        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/latest' `
+        Write-RegLog 'NPI-Install: hole Release-Liste von GitHub...'
+        # /releases/latest taugt nicht: der Maintainer markiert neuere Versionen
+        # nicht zuverlaessig als "latest" (dort ist eine aeltere 2.4er gepinnt,
+        # obwohl 3.x existiert). Daher alle Releases holen und die hoechste
+        # Versionsnummer mit ZIP-Asset waehlen.
+        $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases?per_page=30' `
             -Headers @{ 'User-Agent' = 'PUBG-Suite' } -ErrorAction Stop
+        $release = $releases |
+            Where-Object { -not $_.draft -and ($_.assets | Where-Object { $_.name -match '\.zip$' }) } |
+            Sort-Object { try { [version]([string]$_.tag_name -replace '^[vV]','') } catch { [version]'0.0' } } -Descending |
+            Select-Object -First 1
+        if (-not $release) { throw 'Kein passendes NPI-Release mit ZIP-Asset gefunden' }
         $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
         if (-not $zipAsset) { throw 'Kein ZIP-Asset im NPI-Release gefunden' }
+        Write-RegLog "NPI-Install: neuestes Release = $($release.tag_name)"
 
         $target = $script:NpiDefaultDir
         try {
@@ -362,26 +470,18 @@ function Install-NPIFromGitHub {
 # -silentImport; der Import schreibt via NVAPI DRS_SaveSettings in die
 # Treiber-Datenbank (im NVPI-Quellcode verifiziert: DrsImportService).
 #
-# WICHTIG: Der Import ERSETZT die Settings eines Profils - Settings, die nicht
-# in der .nip stehen, werden geloescht. Deshalb Read-Modify-Write: zuerst den
-# Ist-Zustand via -exportCustomized exportieren, die gewuenschten Werte
-# einmischen, dann importieren. So gehen keine fremden Treibereinstellungen
-# (auch nicht im globalen 'Base Profile') verloren.
+# WICHTIG (im NVPI-Quellcode DrsImportService.ImportProfiles verifiziert): der
+# Import RESETTET jedes Profil der .nip auf Default und schreibt dann nur die
+# .nip-Settings - er MERGED NICHT. Eine Teil-.nip wuerde die uebrigen Settings
+# des Profils loeschen. Deshalb Read-Modify-Write: erst den Ist-Zustand via
+# -exportCustomized exportieren, gewuenschte Werte einmischen, alles importieren.
+#
+# -exportCustomized exportiert nur ANGEPASSTE Profile. Gibt es noch keine,
+# erzeugt NVPI keine Datei (ExitCode 0) - das ist KEIN Fehler, sondern der
+# sichere Fall: es ist nichts zu bewahren, also wird frisch geschrieben.
+# Nach dem Import wird per Re-Export verifiziert, dass die Werte real im
+# Treiber stehen - kein falscher "angewandt"-Stamp wie in <=0.27.
 # ===========================================================================
-
-# Loest den konkreten Hex-Wert fuer ein NPI-Setting auf. Bei Dynamic='FpsCap'
-# wird der Wert aus Get-OptimalFpsCap (Monitor-Hz minus 3) berechnet und auf
-# den von Frame Rate Limiter V3 unterstuetzten Bereich (20..1000 FPS) geklemmt.
-function Resolve-NpiSettingValue {
-    param($Setting)
-    if ($Setting.Dynamic -eq 'FpsCap') {
-        $cap = [int](Get-OptimalFpsCap)
-        if ($cap -lt 20)   { $cap = 20 }
-        if ($cap -gt 1000) { $cap = 1000 }
-        return ('0x{0:X8}' -f $cap)
-    }
-    return $Setting.Val
-}
 
 # Hex-String ('0x10835002' / '0xED') -> dezimaler uint (.nip nutzt Dezimalwerte).
 function ConvertFrom-NpiHex {
@@ -389,25 +489,59 @@ function ConvertFrom-NpiHex {
     return [Convert]::ToUInt32(($Hex -replace '^0x',''), 16)
 }
 
-# Exportiert alle kundenspezifischen Treiberprofile via -exportCustomized und
-# gibt den Pfad der erzeugten .nip zurueck ($null bei Fehler). NVPI beendet
-# sich nach dem Export selbst (im Quellcode verifiziert).
+# Exportiert alle angepassten Treiberprofile via -exportCustomized.
+# Rueckgabe: @{ Path; ExitCode; Launched; Fresh }
+#   Launched : NVPI konnte gestartet werden
+#   ExitCode : NVPI-ExitCode (0 = ok)
+#   Path     : Pfad der .nip ($null = keine erzeugt/vorhanden)
+#   Fresh    : $true, wenn die .nip in DIESEM Lauf neu entstanden ist
+# Bug #4: ExitCode 0 + Path $null heisst "keine angepassten Profile" - der
+# Aufrufer behandelt das als sicheren Leer-Zustand, nicht als Fehler.
 function Export-NpiProfiles {
     param([string]$NpiPath)
-    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $null }
+    $fail = @{ Path=$null; ExitCode=$null; Launched=$false; Fresh=$false }
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) {
+        Write-RegLog "NPI Export: nvidiaProfileInspector nicht gefunden ($NpiPath)" 'ERROR'
+        return $fail
+    }
     $dir = Split-Path $NpiPath -Parent
+    $ver = try { (Get-Item $NpiPath -ErrorAction Stop).VersionInfo.FileVersion } catch { '?' }
     $before = @(Get-ChildItem -Path $dir -Filter 'CustomProfiles_*.nip' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+    $stamp  = Get-Date -Format 'HHmmss_fff'
+    $outLog = Join-Path $env:TEMP "npi-export-out_$stamp.log"
+    $errLog = Join-Path $env:TEMP "npi-export-err_$stamp.log"
+    $rc = $null
     try {
-        $null = Start-Process -FilePath $NpiPath -ArgumentList '-exportCustomized' -WorkingDirectory $dir -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+        $proc = Start-Process -FilePath $NpiPath -ArgumentList '-exportCustomized' -WorkingDirectory $dir `
+            -WindowStyle Hidden -PassThru -Wait `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog -ErrorAction Stop
+        $rc = $proc.ExitCode
     } catch {
-        Write-RegLog "NPI Export Fehler: $($_.Exception.Message)" 'ERROR'
-        return $null
+        Write-RegLog "NPI Export Fehler (NPI v$ver): $($_.Exception.Message)" 'ERROR'
+        return $fail
+    } finally {
+        foreach ($f in @($outLog, $errLog)) {
+            if (Test-Path $f) {
+                $txt = Get-Content $f -Raw -ErrorAction SilentlyContinue
+                if (-not [string]::IsNullOrWhiteSpace($txt)) {
+                    Write-RegLog "NPI Export $([System.IO.Path]::GetFileName($f)): $($txt.Trim())" 'WARN'
+                }
+                Remove-Item $f -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
     $after = @(Get-ChildItem -Path $dir -Filter 'CustomProfiles_*.nip' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
     $new = $after | Where-Object { $_.FullName -notin $before } | Select-Object -Last 1
-    if ($new) { return $new.FullName }
-    if ($after) { return ($after | Select-Object -Last 1).FullName }
-    return $null
+    if ($new) {
+        Write-RegLog "NPI Export OK (NPI v$ver, ExitCode $rc): $($new.FullName)"
+        return @{ Path=$new.FullName; ExitCode=$rc; Launched=$true; Fresh=$true }
+    }
+    if ($after) {
+        Write-RegLog "NPI Export (NPI v$ver, ExitCode $rc): keine neue Datei - vorhandene $($after[-1].FullName)" 'WARN'
+        return @{ Path=$after[-1].FullName; ExitCode=$rc; Launched=$true; Fresh=$false }
+    }
+    Write-RegLog "NPI Export (NPI v$ver, ExitCode $rc): keine .nip - keine angepassten Profile vorhanden" 'INFO'
+    return @{ Path=$null; ExitCode=$rc; Launched=$true; Fresh=$false }
 }
 
 # Parst eine .nip in eine Hashtable: ProfileName -> @{ Exe=@(...); Settings=@{
@@ -482,6 +616,43 @@ function Write-NipProfiles {
     Set-Content -Path $Path -Value $sb.ToString() -Encoding Unicode
 }
 
+# Verifiziert nach einem Import per Re-Export, dass die gewuenschten Aenderungen
+# real im Treiber stehen. Rueckgabe: @{ Verified=[bool]; Detail=[string] }.
+function Test-NpiChangesApplied {
+    param([string]$NpiPath, [array]$Changes)
+    $exp = Export-NpiProfiles -NpiPath $NpiPath
+    if (-not $exp.Launched -or $exp.ExitCode -ne 0) {
+        return @{ Verified=$false; Detail='Verifikations-Export fehlgeschlagen' }
+    }
+    if (-not $exp.Fresh -or -not $exp.Path) {
+        return @{ Verified=$false; Detail='NVPI erzeugte nach dem Import kein angepasstes Profil - Import vermutlich wirkungslos' }
+    }
+    $now = Read-NipProfiles -Path $exp.Path
+    foreach ($ch in $Changes) {
+        $pname = [string]$ch.Profile
+        $prof  = if ($now.ContainsKey($pname)) { $now[$pname] } else { $null }
+        if ($ch.Set) {
+            foreach ($hid in $ch.Set.Keys) {
+                $idDec = [string](ConvertFrom-NpiHex $hid)
+                $want  = [string](ConvertFrom-NpiHex $ch.Set[$hid])
+                $got   = if ($prof -and $prof.Settings.ContainsKey($idDec)) { [string]$prof.Settings[$idDec].Value } else { $null }
+                if ($got -ne $want) {
+                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: erwartet $want, gelesen '$got'" }
+                }
+            }
+        }
+        if ($ch.Remove) {
+            foreach ($hid in $ch.Remove) {
+                $idDec = [string](ConvertFrom-NpiHex $hid)
+                if ($prof -and $prof.Settings.ContainsKey($idDec)) {
+                    return @{ Verified=$false; Detail="Profil '$pname', Setting $hid wurde nicht entfernt" }
+                }
+            }
+        }
+    }
+    return @{ Verified=$true; Detail='alle Werte im Treiber bestaetigt' }
+}
+
 # Kern: Read-Modify-Write fuer Treiberprofile.
 # $Changes = @( @{ Profile='<Name>'; Exe='<exe>'|$null; Set=@{ '<hexId>'='<hexVal>' };
 #                  Remove=@('<hexId>',...) } )
@@ -491,11 +662,26 @@ function Set-NpiProfileSettings {
     if (-not $NpiPath -or -not (Test-Path $NpiPath)) {
         return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden'; Backup=$null }
     }
-    $backup = Export-NpiProfiles -NpiPath $NpiPath
-    if (-not $backup) {
-        return @{ Success=$false; Message='NVPI-Export fehlgeschlagen (NVIDIA-Treiber? Adminrechte?) - kein sicherer Read-Modify-Write moeglich'; Backup=$null }
+    $export = Export-NpiProfiles -NpiPath $NpiPath
+    if (-not $export.Launched) {
+        return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht gestartet werden (Export) - Details im Suite-Log.'; Backup=$null }
     }
-    $current = Read-NipProfiles -Path $backup
+    if ($export.ExitCode -ne 0) {
+        return @{ Success=$false
+                  Message=("NVPI-Export-Fehler (ExitCode $($export.ExitCode)) - bitte NVIDIA Profile Inspector " +
+                           'aktualisieren oder die Einstellung manuell in der NVIDIA-Systemsteuerung setzen. Details im Suite-Log.')
+                  Backup=$null }
+    }
+    $backup = $export.Path
+    if ($backup) {
+        $current = Read-NipProfiles -Path $backup
+    } else {
+        # ExitCode 0, keine Datei: -exportCustomized exportiert nur ANGEPASSTE
+        # Profile - es gibt also noch keine. Sicherer Fall: nichts zu bewahren,
+        # frisch schreiben (der Import resettet die .nip-Profile ohnehin).
+        Write-RegLog 'NPI: keine angepassten Profile - schreibe frisch (kein Ist-Zustand zu mischen)' 'INFO'
+        $current = @{}
+    }
     $out = @{}
     foreach ($ch in $Changes) {
         $pname = [string]$ch.Profile
@@ -525,17 +711,50 @@ function Set-NpiProfileSettings {
     } catch {
         return @{ Success=$false; Message="Erzeugen der .nip fehlgeschlagen: $($_.Exception.Message)"; Backup=$backup }
     }
+    $stamp  = Get-Date -Format 'HHmmss_fff'
+    $outLog = Join-Path $env:TEMP "npi-import-out_$stamp.log"
+    $errLog = Join-Path $env:TEMP "npi-import-err_$stamp.log"
+    $rc = $null
     try {
-        $proc = Start-Process -FilePath $NpiPath -ArgumentList @('-silentImport', $importPath) -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+        $proc = Start-Process -FilePath $NpiPath -ArgumentList @('-silentImport', $importPath) `
+            -WindowStyle Hidden -PassThru -Wait `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog -ErrorAction Stop
         $rc = $proc.ExitCode
     } catch {
         Write-RegLog "NPI Import Fehler: $($_.Exception.Message)" 'ERROR'
         return @{ Success=$false; Message="NVPI-Import fehlgeschlagen: $($_.Exception.Message)"; Backup=$backup }
     } finally {
         if (Test-Path $importPath) { Remove-Item $importPath -Force -ErrorAction SilentlyContinue }
+        foreach ($f in @($outLog, $errLog)) {
+            if (Test-Path $f) {
+                $txt = Get-Content $f -Raw -ErrorAction SilentlyContinue
+                if (-not [string]::IsNullOrWhiteSpace($txt)) {
+                    Write-RegLog "NPI Import $([System.IO.Path]::GetFileName($f)): $($txt.Trim())" 'WARN'
+                }
+                Remove-Item $f -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
-    Write-RegLog "NPI Import ausgefuehrt (ExitCode $rc), Pre-Change-Backup: $backup"
-    return @{ Success=$true; Message='NVIDIA-Profil(e) via .nip importiert'; Backup=$backup }
+    # NVPI ist eine GUI-App ohne dokumentierten Exit-Code-Kontrakt; ein Wert != 0
+    # wird protokolliert. Das echte Erfolgs-Gate ist die Verifikation unten.
+    if ($rc -ne 0) {
+        Write-RegLog "NPI Import: ExitCode $rc (!= 0) - siehe stdout/stderr oben" 'WARN'
+    } else {
+        Write-RegLog "NPI Import ausgefuehrt (ExitCode $rc)"
+    }
+    # Post-Import-Verifikation: re-exportieren und pruefen, ob die Werte real im
+    # Treiber stehen. Verhindert den falschen "angewandt"-Stamp aus <=0.27.
+    $verify = Test-NpiChangesApplied -NpiPath $NpiPath -Changes $Changes
+    if (-not $verify.Verified) {
+        Write-RegLog "NPI Verifikation FEHLGESCHLAGEN: $($verify.Detail)" 'ERROR'
+        return @{ Success=$false
+                  Message=("NVPI-Import lief (ExitCode $rc), aber die Werte konnten nicht im Treiber bestaetigt " +
+                           "werden: $($verify.Detail). Bitte NVPI aktualisieren oder die Einstellung manuell in " +
+                           'der NVIDIA-Systemsteuerung setzen.')
+                  Backup=$backup }
+    }
+    Write-RegLog "NPI Verifikation OK: $($verify.Detail)"
+    return @{ Success=$true; Message="NVIDIA-Profil(e) importiert und im Treiber verifiziert (ExitCode $rc)"; Backup=$backup }
 }
 
 # --- High-Level Apply/Revert (von den Tweaks aufgerufen) -------------------
@@ -543,7 +762,7 @@ function Set-NpiProfileSettings {
 function Invoke-NPIPubgProfile {
     param([string]$NpiPath)
     $setMap = @{}
-    foreach ($s in $script:NpiPubgSettings) { $setMap[$s.Id] = (Resolve-NpiSettingValue -Setting $s) }
+    foreach ($s in $script:NpiPubgSettings) { $setMap[$s.Id] = $s.Val }
     $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
         @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$setMap }
     )
@@ -851,6 +1070,7 @@ $script:PUBGTweaks = @(
             '[/Script/Engine.RendererSettings] r.Streaming.PoolSize=4096',
             '[/Script/Engine.RendererSettings] r.Streaming.HLODStrategy=2',
             '[/Script/Engine.RendererSettings] r.Streaming.FramesForFullUpdate=1',
+            'Entfernt das r.setres-Aufloesungs-Relikt aus [SystemSettings] (falls vorhanden)',
             'Nach Apply: Datei-Attribut ReadOnly (PUBG ueberschreibt sonst beim Spielstart)'
         )
         Check={
@@ -863,8 +1083,12 @@ $script:PUBGTweaks = @(
             $hasStreaming = $c -match 'r\.Streaming\.PoolSize\s*=\s*4096'
             $hasGTSync    = $c -match 'r\.GTSyncType\s*=\s*1'
             $hasTearing   = $c -match 'r\.D3D11\.UseAllowTearing\s*=\s*1'
-            if ($hasSharpen -and $hasStreaming -and $hasGTSync -and $hasTearing) {
+            $hasResRelic  = $c -match '(?m)^\s*r\.setres\s*='
+            if ($hasSharpen -and $hasStreaming -and $hasGTSync -and $hasTearing -and -not $hasResRelic) {
                 @{ Status='OK'; CurrentValue='Tweaks vorhanden'; Detail='' }
+            } elseif ($hasResRelic) {
+                @{ Status='TWEAK'; CurrentValue='r.setres-Aufloesungs-Relikt vorhanden'
+                   Detail='Engine.ini-Tweaks anwenden (entfernt u.a. das r.setres-Relikt)' }
             } else {
                 @{ Status='TWEAK'; CurrentValue='Tweaks fehlen/unvollstaendig'; Detail='Engine.ini-Tweaks anwenden' }
             }
@@ -910,6 +1134,12 @@ $script:PUBGTweaks = @(
                         }
                     }
                 }
+                # Bug #7: r.setres-Relikt entfernen. r.setres=<WxH> in
+                # [SystemSettings] erzwingt eine feste Aufloesung beim Engine-
+                # Start und widerspricht ResolutionSizeX/Y aus GameUserSettings.
+                # Aufloesung gehoert in GameUserSettings, nicht in die Engine.ini.
+                [void](Remove-IniKey -Path $eng -Section 'SystemSettings' -Key 'r.setres')
+
                 try {
                     $f2 = Get-Item $eng -Force
                     $f2.Attributes = $f2.Attributes -bor [System.IO.FileAttributes]::ReadOnly
@@ -928,37 +1158,49 @@ $script:PUBGTweaks = @(
     }
 
     # ---- PUBG: In-Game FPS-Cap ------------------------------------------------
-    # Menuekonform: PUBGs In-Game-FPS-Cap kennt nur "Unlimited" und "Display
-    # Based". "Display Based" = FrameRateLimit auf die Monitor-Hz. Ein krummer
-    # Wert wie 237 ist ueber das Spiel-Menue NICHT erzeugbar und wuerde von PUBG
-    # beim Start zurueckgesetzt - der eigentliche Competitive-Cap (Hz minus 3)
-    # laeuft daher ueber den NVIDIA Frame Rate Limiter (Tweak 'nvprofile').
-    # FrameRateLimit liegt in der Sektion [/Script/TslGame.TslGameUserSettings]
-    # (gegen reale GameUserSettings.ini verifiziert).
+    # Competitive-FPS-Cap = Monitor-Hz minus FpsCapOffset (Default 3, steuerbar
+    # in PUBGProfile.psd1). Diag-Bundle pubg-suite-diag-20260516 hat belegt:
+    #  - PUBG hat ZWEI Cap-Mechanismen in GameUserSettings.ini:
+    #      [/Script/Engine.GameUserSettings]     FrameRateLimit
+    #      [/Script/TslGame.TslGameUserSettings] InGameCustomFrameRateLimit
+    #    Der TslGame-Cap (in PUBGs UI "Bildwiederholrate") ist der in der Praxis
+    #    wirksame - er MUSS daher zwingend mitgeschrieben werden.
+    #  - Der frueher angenommene NVIDIA-Frame-Rate-Limiter-Pfad ist auf aktuellen
+    #    Treibern wirkungslos; die ini ist die verifizierte Quelle des Caps.
+    # Der Tweak schreibt BEIDE Caps + InGameFrameRateLimitType=Customizable +
+    # bUseInGameSmoothedFrameRate=False. PUBG MUSS beim Apply geschlossen sein,
+    # sonst ueberschreibt es die Datei beim Beenden.
     [PSCustomObject]@{
-        Id='fpscap'; Category='PUBG'; Label='PUBG In-Game FPS-Cap = Display-Based (Monitor-Hz)'
-        Description='Setzt PUBGs In-Game-FPS-Cap menuekonform auf "Display Based". Der scharfe Competitive-Cap (Hz minus 3) kommt vom NVIDIA-Treiber-Limiter.'
+        Id='fpscap'; Category='PUBG'; Label='PUBG In-Game FPS-Cap = Monitor-Hz minus Offset'
+        Description='Setzt PUBGs In-Game-FPS-Cap auf Monitor-Hz minus Offset (Default 3) - schreibt FrameRateLimit + InGameCustomFrameRateLimit direkt in GameUserSettings.ini. BattlEye-safe, reversibel.'
         Impact='KEIN'; ImpactDetail=''; RequiresAdmin=$false
         Changes=@(
             'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini',
             'Backup vor Aenderung als .bak_<timestamp>',
-            'FrameRateLimit in [/Script/TslGame.TslGameUserSettings] = aktuelle Primary-Monitor-Hz',
-            'Menuekonform: entspricht der In-Game-Einstellung "FPS-Cap: Display Based"',
-            'PUBG muss beim Anwenden geschlossen sein (sonst Overwrite beim Beenden)'
+            'Cap-Wert = Monitor-Hz minus FpsCapOffset aus PUBGProfile.psd1 (Default 3), min. 60',
+            '[/Script/Engine.GameUserSettings] FrameRateLimit = <Cap>.000000',
+            '[/Script/TslGame.TslGameUserSettings] InGameCustomFrameRateLimit = <Cap>.000000',
+            '[/Script/TslGame.TslGameUserSettings] InGameFrameRateLimitType = Customizable',
+            '[/Script/TslGame.TslGameUserSettings] bUseInGameSmoothedFrameRate = False',
+            'PUBG muss beim Anwenden komplett geschlossen sein (sonst Overwrite beim Beenden)'
         )
         Check={
             $gus = Get-PUBGGameUserPath
             if (-not (Test-Path $gus)) {
                 return @{ Status='SKIP'; CurrentValue='GameUserSettings.ini nicht gefunden'; Detail='PUBG mind. einmal starten/beenden' }
             }
-            $hz = Get-PrimaryMonitorHz
-            $c = Get-Content $gus -Raw
-            if ($c -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)') {
-                $v = [int][math]::Floor([double]$matches[1])
-                if ($v -eq $hz) { @{ Status='OK'; CurrentValue="$v FPS (Display-Based)"; Detail='' } }
-                else { @{ Status='TWEAK'; CurrentValue="$v FPS"; Detail="In-Game-Cap auf Display-Based ($hz) setzen" } }
+            $offset = Get-FpsCapOffset
+            $cap    = Get-CompetitiveFpsCap -RefreshRate (Get-PrimaryMonitorHz) -Offset $offset
+            $engVal = Get-IniValue -Path $gus -Section '/Script/Engine.GameUserSettings'     -Key 'FrameRateLimit'
+            $tslVal = Get-IniValue -Path $gus -Section '/Script/TslGame.TslGameUserSettings' -Key 'InGameCustomFrameRateLimit'
+            $engFps = if ($null -ne $engVal -and $engVal -match '^\s*[\d.]+\s*$') { [int][math]::Floor([double]$engVal) } else { $null }
+            $tslFps = if ($null -ne $tslVal -and $tslVal -match '^\s*[\d.]+\s*$') { [int][math]::Floor([double]$tslVal) } else { $null }
+            if ($engFps -eq $cap -and $tslFps -eq $cap) {
+                @{ Status='OK'; CurrentValue="$cap FPS (Engine + TslGame)"; Detail='' }
             } else {
-                @{ Status='TWEAK'; CurrentValue='kein Cap gesetzt'; Detail="In-Game-Cap auf Display-Based ($hz) setzen" }
+                $eTxt = if ($null -ne $engFps) { "Engine $engFps" } else { 'Engine -' }
+                $tTxt = if ($null -ne $tslFps) { "TslGame $tslFps" } else { 'TslGame -' }
+                @{ Status='TWEAK'; CurrentValue="$eTxt / $tTxt"; Detail="Competitive-Cap auf $cap FPS setzen (Monitor-Hz minus $offset)" }
             }
         }
         Apply={
@@ -971,18 +1213,49 @@ $script:PUBGTweaks = @(
                 if (@(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue).Count -gt 0) {
                     return @{ Success=$false; Message='PUBG laeuft - bitte erst komplett beenden, dann Apply'; Snapshot=$null }
                 }
+                $hz     = Get-PrimaryMonitorHz
+                $offset = Get-FpsCapOffset
+                $cap    = Get-CompetitiveFpsCap -RefreshRate $hz -Offset $offset
+                $capStr = '{0}.000000' -f $cap
+
                 $bak  = Copy-FileToBackup -SourcePath $gus
                 $snap = @{ BackupPath = $bak; OriginalPath = $gus }
-                $hz = Get-PrimaryMonitorHz
-                if (-not (Update-IniValue -Path $gus -Section '/Script/TslGame.TslGameUserSettings' -Key 'FrameRateLimit' -Value ('{0}.000000' -f $hz))) {
+
+                $engSec = '/Script/Engine.GameUserSettings'
+                $tslSec = '/Script/TslGame.TslGameUserSettings'
+
+                # Engine-Cap (Unreal-GameUserSettings-Standardsektion).
+                if (-not (Update-IniValue -Path $gus -Section $engSec -Key 'FrameRateLimit' -Value $capStr)) {
                     return @{ Success=$false; Message='Schreiben von FrameRateLimit fehlgeschlagen'; Snapshot=$snap }
                 }
-                # Post-Apply-Verifikation: Wert zuruecklesen
-                $verify = Get-Content $gus -Raw -ErrorAction SilentlyContinue
-                if ($verify -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)' -and [int][math]::Floor([double]$matches[1]) -eq $hz) {
-                    @{ Success=$true; Message="In-Game-FPS-Cap auf Display-Based ($hz) gesetzt - scharfer Cap via NVIDIA-Profil"; Snapshot=$snap }
+                # TslGame-Cap - der in der Praxis wirksame - plus Typ + Smoothing.
+                foreach ($w in @(
+                    @{ Key='InGameFrameRateLimitType';    Value='Customizable' }
+                    @{ Key='InGameCustomFrameRateLimit';  Value=$capStr }
+                    @{ Key='bUseInGameSmoothedFrameRate'; Value='False' }
+                )) {
+                    if (-not (Update-IniValue -Path $gus -Section $tslSec -Key $w.Key -Value $w.Value)) {
+                        return @{ Success=$false; Message="Schreiben von $($w.Key) fehlgeschlagen"; Snapshot=$snap }
+                    }
+                }
+                # Altlast bis 0.27.0-beta: FrameRateLimit wurde faelschlich auch in
+                # die TslGame-Sektion geschrieben. Doppelten Key dort entfernen,
+                # damit nur der Engine-Sektion-Wert gilt.
+                [void](Remove-IniKey -Path $gus -Section $tslSec -Key 'FrameRateLimit')
+
+                # Post-Apply-Verifikation (Read-Back, section-aware). Die echte
+                # Praxis-Verifikation erfolgt nach vollstaendigem PUBG-Exit durch
+                # den Capture-Test im naechsten Match.
+                $engBack = Get-IniValue -Path $gus -Section $engSec -Key 'FrameRateLimit'
+                $tslBack = Get-IniValue -Path $gus -Section $tslSec -Key 'InGameCustomFrameRateLimit'
+                $engOk = ($null -ne $engBack -and $engBack -match '^\s*[\d.]+\s*$' -and [int][math]::Floor([double]$engBack) -eq $cap)
+                $tslOk = ($null -ne $tslBack -and $tslBack -match '^\s*[\d.]+\s*$' -and [int][math]::Floor([double]$tslBack) -eq $cap)
+                if ($engOk -and $tslOk) {
+                    @{ Success=$true
+                       Message="In-Game-FPS-Cap gesetzt: FrameRateLimit + InGameCustomFrameRateLimit = $cap in GameUserSettings.ini (Monitor $hz Hz minus $offset)"
+                       Snapshot=$snap }
                 } else {
-                    @{ Success=$false; Message='FrameRateLimit nach Apply nicht verifizierbar'; Snapshot=$snap }
+                    @{ Success=$false; Message='FPS-Cap nach Apply nicht verifizierbar (Engine-/TslGame-Sektion)'; Snapshot=$snap }
                 }
             } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
         }
@@ -1020,17 +1293,35 @@ $script:PUBGTweaks = @(
             try {
                 $excl = @()
                 try { $excl = @((Get-MpPreference -ErrorAction Stop).ExclusionPath) } catch {}
-                $snap = @{ PreExisting = @($excl | Where-Object { $_ -match 'PUBG|TslGame' }) }
+                $pubgExcl = @($excl | Where-Object { $_ -match 'PUBG|TslGame' })
+                $snap = @{ PreExisting = $pubgExcl }
+
+                # Bug #6: Ist die Exclusion bereits gesetzt, ist nichts zu tun -
+                # das ist Erfolg, kein Fehler. Frueher lief der Apply trotzdem
+                # weiter und konnte faelschlich Success=false melden, obwohl die
+                # Exclusion nachweislich vorhanden war.
+                if ($pubgExcl.Count -gt 0) {
+                    return @{ Success=$true; Message="Defender-Exclusion bereits vorhanden: $($pubgExcl -join ', ')"; Snapshot=$snap }
+                }
 
                 $steamPath = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
                 if (-not $steamPath) { return @{ Success=$false; Message='Steam-Pfad nicht gefunden'; Snapshot=$snap } }
-                $libContent = Get-Content "$steamPath\steamapps\libraryfolders.vdf" -Raw
+                $vdf = Join-Path $steamPath 'steamapps\libraryfolders.vdf'
+                if (-not (Test-Path $vdf)) { return @{ Success=$false; Message='libraryfolders.vdf nicht gefunden'; Snapshot=$snap } }
+                $libContent = Get-Content $vdf -Raw
                 $libs = [regex]::Matches($libContent, '"path"\s+"([^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '\\\\','\' }
                 foreach ($lib in $libs) {
                     $pubg = Join-Path $lib 'steamapps\common\PUBG'
                     if (Test-Path $pubg) {
                         Add-MpPreference -ExclusionPath $pubg -ErrorAction Stop
-                        return @{ Success=$true; Message="Defender-Exclusion gesetzt: $pubg"; Snapshot=$snap }
+                        # Verifikation: Add-MpPreference wirft nicht zuverlaessig
+                        # bei jedem Fehlschlag - daher Exclusion-Liste zuruecklesen.
+                        $after = @()
+                        try { $after = @((Get-MpPreference -ErrorAction Stop).ExclusionPath) } catch {}
+                        if ($after -contains $pubg) {
+                            return @{ Success=$true; Message="Defender-Exclusion gesetzt: $pubg"; Snapshot=$snap }
+                        }
+                        return @{ Success=$false; Message="Add-MpPreference meldete keinen Fehler, aber die Exclusion ist nicht gelistet: $pubg"; Snapshot=$snap }
                     }
                 }
                 @{ Success=$false; Message='PUBG-Ordner in keiner Steam-Library gefunden'; Snapshot=$snap }
@@ -1325,8 +1616,8 @@ $script:PUBGTweaks = @(
 
     # ---- GPU: NVIDIA PUBG-Profil ---------------------------------------------
     [PSCustomObject]@{
-        Id='nvprofile'; Category='GPU'; Label='NVIDIA PUBG-Profil (Low Latency, Power Max, FPS-Cap)'
-        Description='Setzt das PUBG-Treiberprofil via NVIDIA Profile Inspector (.nip-Import) - inkl. FPS-Cap auf Monitor-Hz minus 3 (Frame Rate Limiter V3)'
+        Id='nvprofile'; Category='GPU'; Label='NVIDIA PUBG-Profil (Low Latency, Power Max)'
+        Description='Setzt das PUBG-Treiberprofil via NVIDIA Profile Inspector (.nip-Import): Power Max, Texture/Threading, V-Sync-Fallback. Der FPS-Cap laeuft separat ueber den Tweak "fpscap" (PUBG-eigene INI).'
         Impact='KEIN'; ImpactDetail='NPI wird bei Bedarf automatisch installiert. Schreibt nur das PUBG-Profil; andere Treiberprofile bleiben unangetastet (Read-Modify-Write).'
         RequiresAdmin=$true
         Changes=@(
@@ -1337,7 +1628,7 @@ $script:PUBGTweaks = @(
             'Texture Filtering Quality = High Performance',
             'Threaded Optimization = ON',
             'Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer; ULL kann CPU-bound Latenz erhoehen)',
-            'Frame Rate Limiter V3 = Monitor-Hz minus 3 (dynamisch, der eigentliche Competitive-FPS-Cap)',
+            'KEIN FPS-Cap hier - der Competitive-Cap kommt vom Tweak "fpscap" (GameUserSettings.ini)',
             'Mechanik: .nip-Datei generieren + nvidiaProfileInspector -silentImport (Read-Modify-Write)',
             'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp'
         )
@@ -1361,7 +1652,7 @@ $script:PUBGTweaks = @(
                 }
                 $result = Invoke-NPIPubgProfile -NpiPath $npi
                 if ($result.Success) {
-                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt (.nip-Import)'
+                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt und im Treiber verifiziert (.nip-Import)'
                        Snapshot=@{ Method='npi-nip'; Backup=$result.Backup; AppliedAt=(Get-Date).ToString('o') } }
                 } else {
                     @{ Success=$false; Message=$result.Message; Snapshot=$null }
@@ -1422,7 +1713,7 @@ $script:PUBGTweaks = @(
                 $result = Invoke-NPIGSync -NpiPath $npi
                 if ($result.Success) {
                     @{ Success=$true
-                       Message='G-Sync aktiviert (global + PUBG). WICHTIG: im Monitor-OSD VRR/Adaptive-Sync einschalten; zur Kontrolle den G-SYNC-Indikator in der NVIDIA-Systemsteuerung aktivieren.'
+                       Message='G-Sync aktiviert und im Treiber verifiziert (global + PUBG). WICHTIG: im Monitor-OSD VRR/Adaptive-Sync einschalten; zur Kontrolle den G-SYNC-Indikator in der NVIDIA-Systemsteuerung aktivieren.'
                        Snapshot=@{ Method='npi-nip'; Backup=$result.Backup; AppliedAt=(Get-Date).ToString('o') } }
                 } else {
                     @{ Success=$false; Message=$result.Message; Snapshot=$null }
