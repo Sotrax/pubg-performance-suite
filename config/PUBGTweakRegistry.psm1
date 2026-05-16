@@ -86,21 +86,27 @@ $script:NpiPubgSettings = @(
     @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
 )
 
-# G-Sync-Settings (eigener Tweak). Werden via NVPI ins PUBG-Profil geschrieben.
-# IDs + Werte gegen nvidiaProfileInspector/CustomSettingNames.xml verifiziert:
+# G-Sync-Settings (eigener Tweak). IDs + Werte gegen die nvidiaProfileInspector-
+# Referenz (CustomSettingNames.xml) verifiziert:
 #   0x1094F157 GSYNC Global Feature    (0=Off, 1=On)
 #   0x1094F1F7 GSYNC Global Mode       (0=Off, 1=Fullscreen only, 2=FS+Windowed)
 #   0x1194F158 GSYNC Application Mode  (0=Off, 1=Fullscreen only, 2=FS+Windowed)
 #   0x10A879CF GSYNC Application State (0=Allow, 1=Force Off, 2=Disallow)
 # PUBG laeuft im Exklusiv-Vollbild -> 'Fullscreen only' genuegt und ist die
-# latenzaermste Wahl. Hinweis: greift nur, wenn im Monitor-OSD VRR/Adaptive-Sync
-# aktiv ist; ggf. zusaetzlich der G-SYNC-Master-Schalter in der NVIDIA-Systemsteuerung.
-$script:NpiGSyncSettings = @(
+# latenzaermste Wahl.
+#  - Base-Settings gehen ins globale Treiberprofil ('Base Profile') = der
+#    Master-G-Sync-Schalter der NVIDIA-Systemsteuerung.
+#  - App-Settings gehen ins PUBG-Profil.
+# Greift nur, wenn im Monitor-OSD VRR/Adaptive-Sync aktiv ist.
+$script:NpiGSyncBaseSettings = @(
     @{ Id='0x1094F157'; Val='0x00000001'; Desc='G-SYNC Global Feature = On' }
     @{ Id='0x1094F1F7'; Val='0x00000001'; Desc='G-SYNC Global Mode = Fullscreen only' }
+)
+$script:NpiGSyncAppSettings = @(
     @{ Id='0x1194F158'; Val='0x00000001'; Desc='G-SYNC Application Mode = Fullscreen only' }
     @{ Id='0x10A879CF'; Val='0x00000000'; Desc='G-SYNC Application State = Allow' }
 )
+$script:NpiBaseProfileName = 'Base Profile'   # globales Treiberprofil in der .nip
 
 # ===========================================================================
 #  PRIVATE HELFER
@@ -347,6 +353,22 @@ function Install-NPIFromGitHub {
     }
 }
 
+# ===========================================================================
+#  NVIDIA-Treibereinstellungen via .nip-Import
+# ---------------------------------------------------------------------------
+# Das aktuelle nvidiaProfileInspector kennt KEIN -setProfileSetting (das war
+# das alte, separate "nVidia Inspector"). Der dokumentierte und einzig
+# funktionierende CLI-Weg ist der Import einer .nip-Profildatei via
+# -silentImport; der Import schreibt via NVAPI DRS_SaveSettings in die
+# Treiber-Datenbank (im NVPI-Quellcode verifiziert: DrsImportService).
+#
+# WICHTIG: Der Import ERSETZT die Settings eines Profils - Settings, die nicht
+# in der .nip stehen, werden geloescht. Deshalb Read-Modify-Write: zuerst den
+# Ist-Zustand via -exportCustomized exportieren, die gewuenschten Werte
+# einmischen, dann importieren. So gehen keine fremden Treibereinstellungen
+# (auch nicht im globalen 'Base Profile') verloren.
+# ===========================================================================
+
 # Loest den konkreten Hex-Wert fuer ein NPI-Setting auf. Bei Dynamic='FpsCap'
 # wird der Wert aus Get-OptimalFpsCap (Monitor-Hz minus 3) berechnet und auf
 # den von Frame Rate Limiter V3 unterstuetzten Bereich (20..1000 FPS) geklemmt.
@@ -361,85 +383,222 @@ function Resolve-NpiSettingValue {
     return $Setting.Val
 }
 
-function Invoke-NPIPubgProfile {
+# Hex-String ('0x10835002' / '0xED') -> dezimaler uint (.nip nutzt Dezimalwerte).
+function ConvertFrom-NpiHex {
+    param([string]$Hex)
+    return [Convert]::ToUInt32(($Hex -replace '^0x',''), 16)
+}
+
+# Exportiert alle kundenspezifischen Treiberprofile via -exportCustomized und
+# gibt den Pfad der erzeugten .nip zurueck ($null bei Fehler). NVPI beendet
+# sich nach dem Export selbst (im Quellcode verifiziert).
+function Export-NpiProfiles {
     param([string]$NpiPath)
-    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
-    $ok = 0; $fail = 0
-    foreach ($s in $script:NpiPubgSettings) {
-        try {
-            $val = Resolve-NpiSettingValue -Setting $s
-            $null = & $NpiPath '-setProfileSetting' $script:NpiPubgProfileName $s.Id $val 2>&1
-            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
-        } catch { $fail++ }
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $null }
+    $dir = Split-Path $NpiPath -Parent
+    $before = @(Get-ChildItem -Path $dir -Filter 'CustomProfiles_*.nip' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+    try {
+        $null = Start-Process -FilePath $NpiPath -ArgumentList '-exportCustomized' -WorkingDirectory $dir -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+    } catch {
+        Write-RegLog "NPI Export Fehler: $($_.Exception.Message)" 'ERROR'
+        return $null
+    }
+    $after = @(Get-ChildItem -Path $dir -Filter 'CustomProfiles_*.nip' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+    $new = $after | Where-Object { $_.FullName -notin $before } | Select-Object -Last 1
+    if ($new) { return $new.FullName }
+    if ($after) { return ($after | Select-Object -Last 1).FullName }
+    return $null
+}
+
+# Parst eine .nip in eine Hashtable: ProfileName -> @{ Exe=@(...); Settings=@{
+# <SettingID-dezimal-als-String> = @{ Value; Type; Name } } }.
+function Read-NipProfiles {
+    param([string]$Path)
+    $result = @{}
+    if (-not $Path -or -not (Test-Path $Path)) { return $result }
+    try {
+        $doc = New-Object System.Xml.XmlDocument
+        $doc.Load($Path)
+    } catch {
+        Write-RegLog "Read-NipProfiles Parse-Fehler: $($_.Exception.Message)" 'WARN'
+        return $result
+    }
+    if (-not $doc.ArrayOfProfile) { return $result }
+    foreach ($p in @($doc.ArrayOfProfile.Profile)) {
+        if (-not $p) { continue }
+        $name = [string]$p.ProfileName
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $exes = @()
+        if ($p.Executeables -and $p.Executeables.string) {
+            $exes = @($p.Executeables.string | ForEach-Object { [string]$_ })
+        }
+        $settings = @{}
+        if ($p.Settings -and $p.Settings.ProfileSetting) {
+            foreach ($s in @($p.Settings.ProfileSetting)) {
+                if ($null -eq $s.SettingID) { continue }
+                $sid = [string]$s.SettingID
+                $stype = if ($s.ValueType) { [string]$s.ValueType } else { 'Dword' }
+                $sname = if ($s.SettingNameInfo) { [string]$s.SettingNameInfo } else { '' }
+                $settings[$sid] = @{ Value=[string]$s.SettingValue; Type=$stype; Name=$sname }
+            }
+        }
+        $result[$name] = @{ Exe=$exes; Settings=$settings }
+    }
+    return $result
+}
+
+# Schreibt eine Profil-Hashtable als .nip (UTF-16, wie NVPI sie selbst erzeugt).
+function Write-NipProfiles {
+    param([string]$Path, [hashtable]$Profiles)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-16"?>')
+    [void]$sb.AppendLine('<ArrayOfProfile>')
+    foreach ($name in $Profiles.Keys) {
+        $pf = $Profiles[$name]
+        [void]$sb.AppendLine('  <Profile>')
+        [void]$sb.AppendLine('    <ProfileName>' + [System.Security.SecurityElement]::Escape([string]$name) + '</ProfileName>')
+        if ($pf.Exe -and @($pf.Exe).Count -gt 0) {
+            [void]$sb.AppendLine('    <Executeables>')
+            foreach ($e in $pf.Exe) { [void]$sb.AppendLine('      <string>' + [System.Security.SecurityElement]::Escape([string]$e) + '</string>') }
+            [void]$sb.AppendLine('    </Executeables>')
+        } else {
+            [void]$sb.AppendLine('    <Executeables />')
+        }
+        [void]$sb.AppendLine('    <Settings>')
+        foreach ($sid in $pf.Settings.Keys) {
+            $s = $pf.Settings[$sid]
+            $t = if ($s.Type) { [string]$s.Type } else { 'Dword' }
+            [void]$sb.AppendLine('      <ProfileSetting>')
+            if ($s.Name) { [void]$sb.AppendLine('        <SettingNameInfo>' + [System.Security.SecurityElement]::Escape([string]$s.Name) + '</SettingNameInfo>') }
+            [void]$sb.AppendLine('        <SettingID>' + $sid + '</SettingID>')
+            [void]$sb.AppendLine('        <SettingValue>' + [string]$s.Value + '</SettingValue>')
+            [void]$sb.AppendLine('        <ValueType>' + $t + '</ValueType>')
+            [void]$sb.AppendLine('      </ProfileSetting>')
+        }
+        [void]$sb.AppendLine('    </Settings>')
+        [void]$sb.AppendLine('  </Profile>')
+    }
+    [void]$sb.AppendLine('</ArrayOfProfile>')
+    Set-Content -Path $Path -Value $sb.ToString() -Encoding Unicode
+}
+
+# Kern: Read-Modify-Write fuer Treiberprofile.
+# $Changes = @( @{ Profile='<Name>'; Exe='<exe>'|$null; Set=@{ '<hexId>'='<hexVal>' };
+#                  Remove=@('<hexId>',...) } )
+# Rueckgabe: @{ Success; Message; Backup }  (Backup = Pre-Change-Export-Pfad)
+function Set-NpiProfileSettings {
+    param([string]$NpiPath, [array]$Changes)
+    if (-not $NpiPath -or -not (Test-Path $NpiPath)) {
+        return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden'; Backup=$null }
+    }
+    $backup = Export-NpiProfiles -NpiPath $NpiPath
+    if (-not $backup) {
+        return @{ Success=$false; Message='NVPI-Export fehlgeschlagen (NVIDIA-Treiber? Adminrechte?) - kein sicherer Read-Modify-Write moeglich'; Backup=$null }
+    }
+    $current = Read-NipProfiles -Path $backup
+    $out = @{}
+    foreach ($ch in $Changes) {
+        $pname = [string]$ch.Profile
+        $existing = if ($current.ContainsKey($pname)) { $current[$pname] } else { $null }
+        $settings = @{}
+        if ($existing) { foreach ($k in $existing.Settings.Keys) { $settings[$k] = $existing.Settings[$k] } }
+        $exe = if ($ch.Exe) { @($ch.Exe) } elseif ($existing) { $existing.Exe } else { @() }
+        if ($ch.Set) {
+            foreach ($hid in $ch.Set.Keys) {
+                $idDec  = [string](ConvertFrom-NpiHex $hid)
+                $valDec = [string](ConvertFrom-NpiHex $ch.Set[$hid])
+                $settings[$idDec] = @{ Value=$valDec; Type='Dword'; Name='' }
+            }
+        }
+        if ($ch.Remove) {
+            foreach ($hid in $ch.Remove) {
+                $idDec = [string](ConvertFrom-NpiHex $hid)
+                if ($settings.ContainsKey($idDec)) { $settings.Remove($idDec) }
+            }
+        }
+        $out[$pname] = @{ Exe=$exe; Settings=$settings }
+    }
+    $importPath = Join-Path $script:RegBackupDir ("npi-import_{0}.nip" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss_fff'))
+    try {
+        if (-not (Test-Path $script:RegBackupDir)) { New-Item -Path $script:RegBackupDir -ItemType Directory -Force | Out-Null }
+        Write-NipProfiles -Path $importPath -Profiles $out
+    } catch {
+        return @{ Success=$false; Message="Erzeugen der .nip fehlgeschlagen: $($_.Exception.Message)"; Backup=$backup }
     }
     try {
-        $sd = Split-Path $script:NpiStampPath -Parent
-        if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
-        Get-Date | Out-File $script:NpiStampPath -Force
-    } catch {}
-    Write-RegLog "NPI Apply: $ok ok, $fail fail"
-    return ($ok -gt 0 -and $fail -eq 0)
+        $proc = Start-Process -FilePath $NpiPath -ArgumentList @('-silentImport', $importPath) -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+        $rc = $proc.ExitCode
+    } catch {
+        Write-RegLog "NPI Import Fehler: $($_.Exception.Message)" 'ERROR'
+        return @{ Success=$false; Message="NVPI-Import fehlgeschlagen: $($_.Exception.Message)"; Backup=$backup }
+    } finally {
+        if (Test-Path $importPath) { Remove-Item $importPath -Force -ErrorAction SilentlyContinue }
+    }
+    Write-RegLog "NPI Import ausgefuehrt (ExitCode $rc), Pre-Change-Backup: $backup"
+    return @{ Success=$true; Message='NVIDIA-Profil(e) via .nip importiert'; Backup=$backup }
+}
+
+# --- High-Level Apply/Revert (von den Tweaks aufgerufen) -------------------
+
+function Invoke-NPIPubgProfile {
+    param([string]$NpiPath)
+    $setMap = @{}
+    foreach ($s in $script:NpiPubgSettings) { $setMap[$s.Id] = (Resolve-NpiSettingValue -Setting $s) }
+    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
+        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$setMap }
+    )
+    if ($res.Success) {
+        try {
+            $sd = Split-Path $script:NpiStampPath -Parent
+            if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
+            Get-Date | Out-File $script:NpiStampPath -Force
+        } catch {}
+    }
+    return $res
 }
 
 function Revert-NPIPubgProfile {
-    # Setzt die 8 vom Apply gesetzten Profil-Werte zurueck. NPI hat keinen
-    # "alten Wert" gespeichert - der definierte Vorzustand ist "kein Custom-
-    # Setting im Profil" -> '-deleteProfileSetting' entfernt den Eintrag, das
-    # Profil erbt danach wieder den globalen Treiber-Default. Das entspricht
-    # exakt dem, was die manuelle Anleitung bisher empfahl ("Restore defaults").
     param([string]$NpiPath)
-    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
-    $ok = 0; $fail = 0
-    foreach ($s in $script:NpiPubgSettings) {
-        try {
-            $null = & $NpiPath '-deleteProfileSetting' $script:NpiPubgProfileName $s.Id 2>&1
-            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
-        } catch { $fail++ }
-    }
-    # Stamp entfernen, damit der Check wieder 'nicht angewandt' meldet.
-    if (Test-Path $script:NpiStampPath) {
+    $ids = @($script:NpiPubgSettings | ForEach-Object { $_.Id })
+    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
+        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Remove=$ids }
+    )
+    if ($res.Success -and (Test-Path $script:NpiStampPath)) {
         Remove-Item $script:NpiStampPath -Force -ErrorAction SilentlyContinue
     }
-    Write-RegLog "NPI Revert: $ok deleteProfileSetting ok, $fail fail"
-    return ($ok -gt 0 -and $fail -eq 0)
+    return $res
 }
 
-# Schreibt die G-Sync-Settings via NVPI ins PUBG-Profil. Eigener Stamp, damit
-# G-Sync unabhaengig vom uebrigen NV-Profil getoggelt werden kann.
 function Invoke-NPIGSync {
     param([string]$NpiPath)
-    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
-    $ok = 0; $fail = 0
-    foreach ($s in $script:NpiGSyncSettings) {
+    $baseMap = @{}; foreach ($s in $script:NpiGSyncBaseSettings) { $baseMap[$s.Id] = $s.Val }
+    $appMap  = @{}; foreach ($s in $script:NpiGSyncAppSettings)  { $appMap[$s.Id]  = $s.Val }
+    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
+        @{ Profile=$script:NpiBaseProfileName; Exe=$null; Set=$baseMap }
+        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$appMap }
+    )
+    if ($res.Success) {
         try {
-            $null = & $NpiPath '-setProfileSetting' $script:NpiPubgProfileName $s.Id $s.Val 2>&1
-            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
-        } catch { $fail++ }
+            $sd = Split-Path $script:GSyncStampPath -Parent
+            if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
+            Get-Date | Out-File $script:GSyncStampPath -Force
+        } catch {}
     }
-    try {
-        $sd = Split-Path $script:GSyncStampPath -Parent
-        if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
-        Get-Date | Out-File $script:GSyncStampPath -Force
-    } catch {}
-    Write-RegLog "NPI G-Sync Apply: $ok ok, $fail fail"
-    return ($ok -gt 0 -and $fail -eq 0)
+    return $res
 }
 
 function Revert-NPIGSync {
     param([string]$NpiPath)
-    if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
-    $ok = 0; $fail = 0
-    foreach ($s in $script:NpiGSyncSettings) {
-        try {
-            $null = & $NpiPath '-deleteProfileSetting' $script:NpiPubgProfileName $s.Id 2>&1
-            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
-        } catch { $fail++ }
-    }
-    if (Test-Path $script:GSyncStampPath) {
+    $baseIds = @($script:NpiGSyncBaseSettings | ForEach-Object { $_.Id })
+    $appIds  = @($script:NpiGSyncAppSettings  | ForEach-Object { $_.Id })
+    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
+        @{ Profile=$script:NpiBaseProfileName; Exe=$null; Remove=$baseIds }
+        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Remove=$appIds }
+    )
+    if ($res.Success -and (Test-Path $script:GSyncStampPath)) {
         Remove-Item $script:GSyncStampPath -Force -ErrorAction SilentlyContinue
     }
-    Write-RegLog "NPI G-Sync Revert: $ok deleteProfileSetting ok, $fail fail"
-    return ($ok -gt 0 -and $fail -eq 0)
+    return $res
 }
 
 # ===========================================================================
@@ -1167,20 +1326,20 @@ $script:PUBGTweaks = @(
     # ---- GPU: NVIDIA PUBG-Profil ---------------------------------------------
     [PSCustomObject]@{
         Id='nvprofile'; Category='GPU'; Label='NVIDIA PUBG-Profil (Low Latency, Power Max, FPS-Cap)'
-        Description='Setzt das PUBG-Treiberprofil via NVIDIA Profile Inspector - inkl. FPS-Cap auf Monitor-Hz minus 3 (Frame Rate Limiter V3)'
-        Impact='KEIN'; ImpactDetail='NPI wird bei Bedarf automatisch installiert'
-        RequiresAdmin=$false
+        Description='Setzt das PUBG-Treiberprofil via NVIDIA Profile Inspector (.nip-Import) - inkl. FPS-Cap auf Monitor-Hz minus 3 (Frame Rate Limiter V3)'
+        Impact='KEIN'; ImpactDetail='NPI wird bei Bedarf automatisch installiert. Schreibt nur das PUBG-Profil; andere Treiberprofile bleiben unangetastet (Read-Modify-Write).'
+        RequiresAdmin=$true
         Changes=@(
             'Tool: NVIDIA Profile Inspector (Auto-Install nach C:\Tools\nvidiaProfileInspector\)',
-            "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS",
+            "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS (TslGame.exe)",
             'Power Management Mode = Prefer Max Performance',
             'Vertical Sync = ON (G-SYNC-101: Tearing-Fallback, keine Latenz solange Cap unter Refresh)',
             'Texture Filtering Quality = High Performance',
             'Threaded Optimization = ON',
             'Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer; ULL kann CPU-bound Latenz erhoehen)',
             'Frame Rate Limiter V3 = Monitor-Hz minus 3 (dynamisch, der eigentliche Competitive-FPS-Cap)',
-            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp',
-            'Revert: entfernt die Profil-Werte wieder (NPI -deleteProfileSetting -> Treiber-Default)'
+            'Mechanik: .nip-Datei generieren + nvidiaProfileInspector -silentImport (Read-Modify-Write)',
+            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp'
         )
         Check={
             if (Test-Path $script:NpiStampPath) {
@@ -1201,60 +1360,57 @@ $script:PUBGTweaks = @(
                     if (-not $npi) { return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht installiert werden'; Snapshot=$null } }
                 }
                 $result = Invoke-NPIPubgProfile -NpiPath $npi
-                if (Test-Path $script:NpiStampPath) {
-                    # Snapshot muss != $null sein, sonst blendet die Suite den Revert-Button aus.
-                    # Der Revert leitet alles aus $script:NpiPubgSettings ab; der Snapshot dient
-                    # nur als History-Marker.
-                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt'
-                       Snapshot=@{ Method='npi-deleteProfileSetting'; SettingCount=$script:NpiPubgSettings.Count; AppliedAt=(Get-Date).ToString('o') } }
+                if ($result.Success) {
+                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt (.nip-Import)'
+                       Snapshot=@{ Method='npi-nip'; Backup=$result.Backup; AppliedAt=(Get-Date).ToString('o') } }
                 } else {
-                    @{ Success=$false; Message='NPI-Profil nicht bestaetigt (kein Stamp)'; Snapshot=$null }
+                    @{ Success=$false; Message=$result.Message; Snapshot=$null }
                 }
             } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
         }
         Revert={
             param($Snapshot)
-            # Entfernt die gesetzten Profil-Settings -> Profil erbt wieder die
-            # globalen Treiber-Defaults. Braucht NPI; ohne NPI -> manueller Hinweis.
+            # Read-Modify-Write: exportiert den Ist-Zustand, entfernt nur die vom
+            # Tweak gesetzten Profil-Werte, importiert zurueck. Braucht NPI.
             $npi = Get-NPIPath
             if (-not $npi) {
-                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - die Profil-Werte manuell via NVIDIA-Systemsteuerung "Wiederherstellen" zuruecksetzen' }
+                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - Profil-Werte manuell via NVIDIA-Systemsteuerung zuruecksetzen' }
             }
-            if (Revert-NPIPubgProfile -NpiPath $npi) {
-                @{ Success=$true; Message="NVIDIA PUBG-Profil zurueckgesetzt ($($script:NpiPubgSettings.Count) Werte auf Treiber-Default)" }
+            $result = Revert-NPIPubgProfile -NpiPath $npi
+            if ($result.Success) {
+                @{ Success=$true; Message='NVIDIA PUBG-Profil zurueckgesetzt (Profil-Werte entfernt -> Treiber-Default)' }
             } else {
-                @{ Success=$false; Message='NPI-Revert teilweise fehlgeschlagen - ggf. via NVIDIA-Systemsteuerung "Wiederherstellen"' }
+                @{ Success=$false; Message=$result.Message }
             }
         }
     }
 
     # ---- GPU: G-Sync aktivieren ----------------------------------------------
-    # Setzt die G-Sync-Settings via NVPI ins PUBG-Profil (Fullscreen only).
-    # G-Sync ist die Voraussetzung fuer tearing-freies Spielen OHNE V-Sync-Latenz:
-    # zusammen mit dem FPS-Cap unter Refresh (Tweak 'nvprofile') bleibt die
-    # Framerate im VRR-Fenster -> kein Tearing, kein Stutter, minimale Latenz.
+    # Aktiviert G-Sync/VRR: globales 'Base Profile' (= NVCP-Master-Schalter) +
+    # PUBG-Profil. G-Sync ist die Voraussetzung fuer tearing-freies Spielen OHNE
+    # V-Sync-Latenz: zusammen mit dem FPS-Cap unter Refresh (Tweak 'nvprofile')
+    # bleibt die Framerate im VRR-Fenster -> kein Tearing, kein Stutter.
     [PSCustomObject]@{
         Id='gsync'; Category='GPU'; Label='G-Sync aktivieren (VRR, tearing-frei)'
-        Description='Aktiviert G-Sync/VRR fuer PUBG via NVIDIA Profile Inspector - Voraussetzung fuer tearing-freies Spielen ohne V-Sync-Latenz'
-        Impact='KEIN'; ImpactDetail='Benoetigt einen G-Sync-(Compatible-)Monitor mit aktiver VRR/Adaptive-Sync-Einstellung im Monitor-OSD'
-        RequiresAdmin=$false
+        Description='Aktiviert G-Sync/VRR global + fuer PUBG via NVIDIA Profile Inspector (.nip-Import) - Voraussetzung fuer tearing-freies Spielen ohne V-Sync-Latenz'
+        Impact='KEIN'; ImpactDetail='Benoetigt einen G-Sync-(Compatible-)Monitor mit aktiver VRR/Adaptive-Sync-Einstellung im Monitor-OSD. Setzt das globale Treiberprofil per Read-Modify-Write - vorhandene globale Einstellungen bleiben erhalten.'
+        RequiresAdmin=$true
         Changes=@(
-            'Tool: NVIDIA Profile Inspector',
-            "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS",
-            'G-SYNC Global Feature = On',
-            'G-SYNC Global Mode = Fullscreen only',
-            'G-SYNC Application Mode = Fullscreen only',
-            'G-SYNC Application State = Allow',
+            'Tool: NVIDIA Profile Inspector (.nip-Import, Read-Modify-Write)',
+            'Globales Profil (Base Profile = NVCP-Master-Schalter):',
+            '  G-SYNC Global Feature = On, Global Mode = Fullscreen only',
+            "PUBG-Profil (TslGame.exe):",
+            '  G-SYNC Application Mode = Fullscreen only, Application State = Allow',
             'Stamp-File: %LOCALAPPDATA%\PUBGDiag\gsync-applied.stamp',
-            'Voraussetzung: VRR/Adaptive-Sync im Monitor-OSD aktiv; ggf. G-SYNC-Master-Schalter in der NVIDIA-Systemsteuerung'
+            'Voraussetzung: VRR/Adaptive-Sync muss im Monitor-OSD aktiv sein (kann die Suite nicht setzen)'
         )
         Check={
             if (Test-Path $script:GSyncStampPath) {
                 $age = (Get-Date) - (Get-Item $script:GSyncStampPath).LastWriteTime
                 return @{ Status='OK'; CurrentValue="aktiviert vor $([int]$age.TotalDays) Tagen"
-                          Detail='Bestaetigung: G-SYNC-Indikator in der NVIDIA-Systemsteuerung einschalten' }
+                          Detail='Bestaetigung: VRR im Monitor-OSD pruefen, G-SYNC-Indikator in der NVIDIA-Systemsteuerung einschalten' }
             }
-            @{ Status='TWEAK'; CurrentValue='nicht aktiviert'; Detail='G-Sync fuer PUBG aktivieren' }
+            @{ Status='TWEAK'; CurrentValue='nicht aktiviert'; Detail='G-Sync global + fuer PUBG aktivieren' }
         }
         Apply={
             try {
@@ -1263,12 +1419,13 @@ $script:PUBGTweaks = @(
                     $npi = Install-NPIFromGitHub
                     if (-not $npi) { return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht installiert werden'; Snapshot=$null } }
                 }
-                if (Invoke-NPIGSync -NpiPath $npi) {
+                $result = Invoke-NPIGSync -NpiPath $npi
+                if ($result.Success) {
                     @{ Success=$true
-                       Message='G-Sync fuer PUBG aktiviert. WICHTIG: im Monitor-OSD VRR/Adaptive-Sync einschalten; zur Kontrolle den G-SYNC-Indikator in der NVIDIA-Systemsteuerung aktivieren.'
-                       Snapshot=@{ Method='npi-deleteProfileSetting'; SettingCount=$script:NpiGSyncSettings.Count; AppliedAt=(Get-Date).ToString('o') } }
+                       Message='G-Sync aktiviert (global + PUBG). WICHTIG: im Monitor-OSD VRR/Adaptive-Sync einschalten; zur Kontrolle den G-SYNC-Indikator in der NVIDIA-Systemsteuerung aktivieren.'
+                       Snapshot=@{ Method='npi-nip'; Backup=$result.Backup; AppliedAt=(Get-Date).ToString('o') } }
                 } else {
-                    @{ Success=$false; Message='G-Sync-Settings konnten nicht gesetzt werden (NVPI-Fehler)'; Snapshot=$null }
+                    @{ Success=$false; Message=$result.Message; Snapshot=$null }
                 }
             } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
         }
@@ -1278,10 +1435,11 @@ $script:PUBGTweaks = @(
             if (-not $npi) {
                 return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - G-Sync-Werte manuell via NVIDIA-Systemsteuerung zuruecksetzen' }
             }
-            if (Revert-NPIGSync -NpiPath $npi) {
-                @{ Success=$true; Message='G-Sync-Profilwerte zurueckgesetzt (auf Treiber-Default)' }
+            $result = Revert-NPIGSync -NpiPath $npi
+            if ($result.Success) {
+                @{ Success=$true; Message='G-Sync-Profilwerte zurueckgesetzt (global + PUBG auf Treiber-Default)' }
             } else {
-                @{ Success=$false; Message='G-Sync-Revert teilweise fehlgeschlagen' }
+                @{ Success=$false; Message=$result.Message }
             }
         }
     }

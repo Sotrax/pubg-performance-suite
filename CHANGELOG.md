@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.27.0-beta] - 2026-05-16
 ### Fixed
+- **CRITICAL: Die gesamte NVIDIA-Automatik hat nie funktioniert.** Die Suite
+  rief `nvidiaProfileInspector.exe -setProfileSetting …` auf — doch dieses
+  CLI-Argument gehörte zum alten, separaten Tool „nVidia Inspector". Das
+  aktuelle `nvidiaProfileInspector` (das die Suite herunterlädt) kennt laut
+  offizieller README nur `.nip`-Import/-Export. Der Aufruf lief ins Leere; es
+  wurde **nie etwas in den Treiber geschrieben** — kein FPS-Cap, kein
+  Power-Management. Der Stamp wurde trotzdem gesetzt → die Suite meldete
+  fälschlich „angewandt". Das ist die tiefste Ursache von Bug #1.
+  **Umbau:** Der NVIDIA-Mechanismus generiert jetzt eine `.nip`-Profildatei und
+  importiert sie via `-silentImport` (offiziell dokumentiert; schreibt via
+  NVAPI `DRS_SaveSettings` in die Treiber-DB — im NVPI-Quellcode verifiziert).
+  Read-Modify-Write (Export → Mischen → Import) stellt sicher, dass **keine
+  fremden Treiberprofil-Einstellungen verloren gehen** — auch nicht im globalen
+  `Base Profile`. `nvprofile`/`gsync` brauchen jetzt Adminrechte (NVPI muss zum
+  Schreiben elevated laufen).
 - **NVIDIA-Profil: V-Sync schrieb einen ungültigen Wert.** `0x00A879CF`
   (Vertical Sync) stand auf `0x00000000` — kein definierter Wert für dieses
   Setting (gültig wären `0x08416747` Off / `0x47814940` On). Jetzt **`0x47814940`
@@ -26,9 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Neuer Tweak „G-Sync aktivieren".** Setzt die G-Sync-/VRR-Settings via
-  NVIDIA Profile Inspector ins PUBG-Profil (Global Feature/Mode, Application
-  Mode/State — IDs gegen die NVPI-Referenz verifiziert). G-Sync ist die
-  Voraussetzung für tearing-freies Spielen ohne V-Sync-Latenz.
+  NVIDIA Profile Inspector — **globales `Base Profile`** (= NVCP-Master-Schalter:
+  Global Feature/Mode) **und** PUBG-Profil (Application Mode/State). IDs gegen
+  die NVPI-Referenz verifiziert. G-Sync ist die Voraussetzung für tearing-freies
+  Spielen ohne V-Sync-Latenz. Das Monitor-OSD (VRR/Adaptive-Sync) bleibt
+  manuell — Display-Firmware ist nicht skriptbar.
 - **G-Sync als Dashboard-Live-Check** (10. Eintrag) inkl. Empfehlungs-Card.
 - **GPU-Treiber-Anzeige.** Dashboard-Live-Check „GPU-Treiber" (Version via
   nvidia-smi + Alter, WARN ab 90 Tagen) sowie Treiberversion/-datum im
