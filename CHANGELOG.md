@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Planned
-- Granularer Grafik-Tab: Einzel-Dropdowns pro Setting (Anzeigemodus, AA, Schatten, Texturen ...) als Erweiterung des neuen Grafik-Tabs
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 - GitHub Actions release pipeline
+
+## [0.20.0-beta] - 2026-05-16
+### Added
+- **Granularer Grafik-Tab.** Neue Karte „Einzel-Einstellungen" mit je einem
+  Dropdown pro Grafik-Option (Anzeigemodus, Anti-Aliasing, Texturen, Sichtweite,
+  Schatten, Post-Processing, Effekte, Laub). Die Dropdowns zeigen beim Öffnen
+  des Tabs die aktuell in `GameUserSettings.ini` gesetzten Werte; mit „Einzel-
+  Werte anwenden" wird die Auswahl geschrieben (`Invoke-EsportGfxApplyCustom` —
+  gleicher PUBG-läuft-Check und Backup-vor-Änderung wie der Profil-Apply,
+  `FullscreenMode` wird mit `LastConfirmed`/`Preferred` synchronisiert).
+  **Der Knopf „Competitive-Profil anwenden" bleibt** — er setzt weiterhin mit
+  einem Klick alles auf das erarbeitete Esport-Profil zurück.
 
 ## [0.19.0-beta] - 2026-05-16
 ### Added

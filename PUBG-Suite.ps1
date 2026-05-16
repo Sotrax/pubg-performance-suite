@@ -30,7 +30,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.19.0-beta'
+    Version    = '0.20.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -669,6 +669,55 @@ function Invoke-EsportGfxRevert {
     return @{ Success=$false; Message='Kein Backup-Snapshot vorhanden' }
 }
 
+# Schreibt eine im Grafik-Tab frei zusammengestellte Werte-Auswahl in
+# GameUserSettings.ini. Gleiche Schutzmechanismen wie Invoke-EsportGfxApply
+# (PUBG-Prozess-Check, Update-IniValue sichert vor jeder Aenderung selbst),
+# aber mit den vom Nutzer gewaehlten Werten statt dem Profil. FullscreenMode
+# wird mit LastConfirmed/Preferred synchronisiert, damit PUBG die Auswahl
+# nicht beim Start zuruecksetzt.
+#   $Values = @{ '<INI-Sektion>' = @{ '<Key>' = '<Wert>' } }
+# Rueckgabe: @{ Success; Message }
+function Invoke-EsportGfxApplyCustom {
+    param([hashtable]$Values)
+    try {
+        $gus = Get-PUBGGameUserPath
+        if (-not (Test-Path $gus)) {
+            return @{ Success=$false; Message='GameUserSettings.ini nicht gefunden - PUBG einmal starten/beenden' }
+        }
+        if (@(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue).Count -gt 0) {
+            return @{ Success=$false; Message='PUBG laeuft - bitte erst komplett beenden, dann Apply' }
+        }
+        foreach ($section in $Values.Keys) {
+            foreach ($key in $Values[$section].Keys) {
+                $val = [string]$Values[$section][$key]
+                if (-not (Update-IniValue -Path $gus -Section $section -Key $key -Value $val)) {
+                    Write-SuiteLog "esportgfx (custom): Update fehlgeschlagen bei [$section] $key" 'ERROR'
+                    return @{ Success=$false; Message="Schreiben fehlgeschlagen bei [$section] $key" }
+                }
+            }
+        }
+        # FullscreenMode konsistent halten (sonst Confirm-Dialog/Reset beim Start)
+        $resSection = '/Script/TslGame.TslGameUserSettings'
+        if ($Values[$resSection] -and $Values[$resSection].ContainsKey('FullscreenMode')) {
+            $fm = [string]$Values[$resSection]['FullscreenMode']
+            $null = Update-IniValue -Path $gus -Section $resSection -Key 'LastConfirmedFullscreenMode' -Value $fm
+            $null = Update-IniValue -Path $gus -Section $resSection -Key 'PreferredFullscreenMode' -Value $fm
+        }
+        # LastUserConfirmedResolutionSizeX/Y mit aktueller Aufloesung synchron halten
+        $cNow = Get-Content $gus -Raw -ErrorAction SilentlyContinue
+        foreach ($axis in 'X','Y') {
+            if ($cNow -and ($cNow -match "(?m)^\s*ResolutionSize$axis\s*=\s*(\d+)")) {
+                $null = Update-IniValue -Path $gus -Section $resSection -Key "LastUserConfirmedResolutionSize$axis" -Value $matches[1]
+            }
+        }
+        Write-SuiteLog 'esportgfx: Einzel-Grafikwerte geschrieben' 'INFO'
+        return @{ Success=$true; Message='Einzel-Einstellungen angewendet' }
+    } catch {
+        Write-SuiteLog "esportgfx ApplyCustom Exception: $($_.Exception.Message)" 'ERROR'
+        return @{ Success=$false; Message="Fehler: $($_.Exception.Message)" }
+    }
+}
+
 $Global:EsportGfxTweak = [PSCustomObject]@{
     Id           = 'esportgfx'
     Cat          = 'PUBG'
@@ -933,6 +982,21 @@ $xamlTemplate = @'
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Foreground" Value="@@Accent@@"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Background" Value="@@Surface2@@"/>
+            <Setter Property="Foreground" Value="@@TextPrimary@@"/>
+            <Setter Property="BorderBrush" Value="@@BorderStrong@@"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="@@Surface1@@"/>
+            <Setter Property="Foreground" Value="@@TextPrimary@@"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="12"/>
         </Style>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="@@Surface1@@"/>
@@ -1419,6 +1483,95 @@ $xamlTemplate = @'
                             </StackPanel>
                         </Border>
 
+                        <!-- Einzel-Einstellungen-Card (granulare Dropdowns) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Einzel-Einstellungen" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"
+                                           Text="Jede Grafik-Option einzeln waehlen und mit 'Einzel-Werte anwenden' in GameUserSettings.ini schreiben. Die Dropdowns zeigen die aktuell gesetzten Werte. Der Knopf 'Competitive-Profil anwenden' unten setzt jederzeit ALLES wieder auf das erarbeitete Esport-Profil zurueck."/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170"/>
+                                        <ColumnDefinition Width="230"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Anzeigemodus" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="0" Grid.Column="1" x:Name="cmbFullscreen" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Exklusiv-Vollbild"/>
+                                        <ComboBoxItem Tag="1" Content="Vollbild-Fenster"/>
+                                        <ComboBoxItem Tag="2" Content="Fenster"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Anti-Aliasing" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="1" Grid.Column="1" x:Name="cmbAA" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Texturen" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="2" Grid.Column="1" x:Name="cmbTexture" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Sichtweite" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="3" Grid.Column="1" x:Name="cmbViewDist" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Schatten" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="4" Grid.Column="1" x:Name="cmbShadow" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Post-Processing" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="5" Grid.Column="1" x:Name="cmbPost" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Effekte" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="6" Grid.Column="1" x:Name="cmbEffects" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Laub" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <ComboBox Grid.Row="7" Grid.Column="1" x:Name="cmbFoliage" Margin="0,4">
+                                        <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
+                                        <ComboBoxItem Tag="1" Content="Niedrig"/>
+                                        <ComboBoxItem Tag="2" Content="Mittel"/>
+                                        <ComboBoxItem Tag="3" Content="Hoch"/>
+                                        <ComboBoxItem Tag="4" Content="Ultra"/>
+                                    </ComboBox>
+                                </Grid>
+                                <Button x:Name="btnGfxApplyCustom" Content="Einzel-Werte anwenden" Style="{StaticResource SuccessButton}" Width="220" Height="34" HorizontalAlignment="Left" Margin="0,14,0,0"/>
+                                <TextBlock x:Name="lblGfxCustomInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Aktions-Card -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -1580,6 +1733,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
     'btnFilterAll','btnFilterOpen','btnFilterDone',
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
+    'cmbFullscreen','cmbAA','cmbTexture','cmbViewDist','cmbShadow','cmbPost','cmbEffects','cmbFoliage','btnGfxApplyCustom','lblGfxCustomInfo',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'btnRefreshBackups','lblBackupInfo','backupList',
@@ -2890,6 +3044,60 @@ $ctrls.btnApplyAll.Add_Click({
 # Eigener Tab fuer das PUBG Esport-Grafik-Profil ($Global:EsportGfxTweak).
 # Bewusst getrennt von "Apply All" - separates Apply/Revert.
 
+# Liefert den Tag-Wert des selektierten ComboBoxItem (= INI-Wert), sonst $null.
+function Get-CbTag {
+    param($ComboBox)
+    $item = $ComboBox.SelectedItem
+    if ($item -and $null -ne $item.Tag) { return [string]$item.Tag }
+    return $null
+}
+
+# Selektiert im ComboBox das Item mit passendem Tag; faellt sonst auf Index 0.
+function Set-CbByTag {
+    param($ComboBox, [string]$Tag)
+    foreach ($item in $ComboBox.Items) {
+        if ([string]$item.Tag -eq $Tag) { $ComboBox.SelectedItem = $item; return }
+    }
+    if ($ComboBox.Items.Count -gt 0) { $ComboBox.SelectedIndex = 0 }
+}
+
+# Liest die aktuellen GameUserSettings.ini-Werte und stellt die Einzel-Dropdowns
+# darauf ein. Fehlt die INI oder ein Key, faellt der Wert aufs Profil zurueck.
+function Sync-GraphicsDropdowns {
+    if (-not $ctrls.cmbAA) { return }
+    $gus = Get-PUBGGameUserPath
+    $content = $null
+    if (Test-Path $gus) { $content = Get-Content $gus -Raw -ErrorAction SilentlyContinue }
+
+    $getVal = {
+        param($section, $key)
+        if ($content -and ($content -match ('(?m)^\s*' + [regex]::Escape($key) + '\s*=\s*(.+?)\s*$'))) {
+            # Float-Werte ('2.000000') auf den Ganzzahl-Teil reduzieren, damit
+            # sie auf die 0..4-Tags der Dropdowns passen.
+            $raw = [string]$matches[1]
+            $num = $null; try { $num = [double]$raw } catch {}
+            if ($null -ne $num) { return ([string][int][math]::Floor($num)) }
+            return $raw
+        }
+        if ($Global:EsportGfxProfile -and $Global:EsportGfxProfile[$section] -and $Global:EsportGfxProfile[$section][$key]) {
+            $pv = [string]$Global:EsportGfxProfile[$section][$key]
+            $pn = $null; try { $pn = [double]$pv } catch {}
+            if ($null -ne $pn) { return ([string][int][math]::Floor($pn)) }
+            return $pv
+        }
+        return '0'
+    }
+    $sg = 'ScalabilityGroups'; $ts = '/Script/TslGame.TslGameUserSettings'
+    Set-CbByTag $ctrls.cmbFullscreen (& $getVal $ts 'FullscreenMode')
+    Set-CbByTag $ctrls.cmbAA         (& $getVal $sg 'sg.AntiAliasingQuality')
+    Set-CbByTag $ctrls.cmbTexture    (& $getVal $sg 'sg.TextureQuality')
+    Set-CbByTag $ctrls.cmbViewDist   (& $getVal $sg 'sg.ViewDistanceQuality')
+    Set-CbByTag $ctrls.cmbShadow     (& $getVal $sg 'sg.ShadowQuality')
+    Set-CbByTag $ctrls.cmbPost       (& $getVal $sg 'sg.PostProcessQuality')
+    Set-CbByTag $ctrls.cmbEffects    (& $getVal $sg 'sg.EffectsQuality')
+    Set-CbByTag $ctrls.cmbFoliage    (& $getVal $sg 'sg.FoliageQuality')
+}
+
 function Update-GraphicsTab {
     if (-not $ctrls.lblGfxStatus) { return }
     $tw = $Global:EsportGfxTweak
@@ -2946,6 +3154,9 @@ function Update-GraphicsTab {
     } else {
         $ctrls.lblGfxInfo.Text = 'Backup vorhanden - Zuruecksetzen moeglich.'
     }
+
+    # Einzel-Dropdowns auf den aktuellen INI-Stand bringen
+    Sync-GraphicsDropdowns
 }
 
 $ctrls.btnGfxRefresh.Add_Click({ Update-GraphicsTab })
@@ -2991,6 +3202,58 @@ $ctrls.btnGfxRevert.Add_Click({
     } else {
         $Global:LastGfxInfo = "Zuruecksetzen fehlgeschlagen ($ts) - siehe Logs (Settings-Tab)."
         [System.Windows.MessageBox]::Show('Zuruecksetzen fehlgeschlagen. Details: Logs im Settings-Tab.', 'Grafik', 'OK', 'Warning') | Out-Null
+    }
+    Update-GraphicsTab
+})
+
+$ctrls.btnGfxApplyCustom.Add_Click({
+    # Werte aus den Dropdowns einsammeln
+    $sgSec = 'ScalabilityGroups'
+    $tsSec = '/Script/TslGame.TslGameUserSettings'
+    $values = @{
+        $sgSec = @{
+            'sg.AntiAliasingQuality' = (Get-CbTag $ctrls.cmbAA)
+            'sg.TextureQuality'      = (Get-CbTag $ctrls.cmbTexture)
+            'sg.ViewDistanceQuality' = (Get-CbTag $ctrls.cmbViewDist)
+            'sg.ShadowQuality'       = (Get-CbTag $ctrls.cmbShadow)
+            'sg.PostProcessQuality'  = (Get-CbTag $ctrls.cmbPost)
+            'sg.EffectsQuality'      = (Get-CbTag $ctrls.cmbEffects)
+            'sg.FoliageQuality'      = (Get-CbTag $ctrls.cmbFoliage)
+        }
+        $tsSec = @{
+            'FullscreenMode'      = (Get-CbTag $ctrls.cmbFullscreen)
+            # Werte als nutzer-gewaehlt markieren -> PUBG setzt sie nicht zurueck
+            'bSavedGraphicOption' = 'True'
+        }
+    }
+    # Defensive: keine $null-Werte schreiben (waere der Fall, wenn ein Dropdown
+    # leer ist - sollte nie passieren, da Sync immer selektiert).
+    foreach ($sec in @($values.Keys)) {
+        foreach ($k in @($values[$sec].Keys)) {
+            if ($null -eq $values[$sec][$k]) {
+                [System.Windows.MessageBox]::Show("Dropdown '$k' hat keinen Wert - Tab neu laden (Status pruefen).", 'Grafik', 'OK', 'Warning') | Out-Null
+                return
+            }
+        }
+    }
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Die in den Dropdowns gewaehlten Einzel-Werte werden in PUBGs GameUserSettings.ini geschrieben.`n`n" +
+        "WICHTIG: PUBG muss JETZT komplett geschlossen sein.`n`n" +
+        "Vor jeder Aenderung wird ein Backup erstellt (Wiederherstellen ueber den Backup-Manager im Settings-Tab).`n`nFortfahren?",
+        'Einzel-Werte anwenden', 'YesNo', 'Question')
+    if ($confirm -ne 'Yes') { return }
+    $ts = Get-Date -Format 'HH:mm:ss'
+    $res = Invoke-EsportGfxApplyCustom -Values $values
+    if ($res.Success) {
+        $Global:LastGfxInfo = "Einzel-Werte angewendet ($ts). PUBG starten und im Grafikmenue pruefen."
+        $ctrls.lblGfxCustomInfo.Text = "Angewendet ($ts) - $($res.Message)."
+        $ctrls.lblGfxCustomInfo.Foreground = $Global:SuiteColors.StatusOK
+        [System.Windows.MessageBox]::Show('Einzel-Einstellungen angewendet.', 'Grafik', 'OK', 'Information') | Out-Null
+    } else {
+        $Global:LastGfxInfo = "Einzel-Apply fehlgeschlagen ($ts) - siehe Logs (Settings-Tab)."
+        $ctrls.lblGfxCustomInfo.Text = "Fehlgeschlagen ($ts) - $($res.Message)."
+        $ctrls.lblGfxCustomInfo.Foreground = $Global:SuiteColors.StatusError
+        [System.Windows.MessageBox]::Show("Anwenden fehlgeschlagen:`n`n$($res.Message)`n`nDetails: Logs im Settings-Tab.", 'Grafik', 'OK', 'Warning') | Out-Null
     }
     Update-GraphicsTab
 })
