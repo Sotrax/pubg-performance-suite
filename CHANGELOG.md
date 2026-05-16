@@ -10,6 +10,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.27.0-beta] - 2026-05-16
+### Fixed
+- **CRITICAL: Die gesamte NVIDIA-Automatik hat nie funktioniert.** Die Suite
+  rief `nvidiaProfileInspector.exe -setProfileSetting …` auf — doch dieses
+  CLI-Argument gehörte zum alten, separaten Tool „nVidia Inspector". Das
+  aktuelle `nvidiaProfileInspector` (das die Suite herunterlädt) kennt laut
+  offizieller README nur `.nip`-Import/-Export. Der Aufruf lief ins Leere; es
+  wurde **nie etwas in den Treiber geschrieben** — kein FPS-Cap, kein
+  Power-Management. Der Stamp wurde trotzdem gesetzt → die Suite meldete
+  fälschlich „angewandt". Das ist die tiefste Ursache von Bug #1.
+  **Umbau:** Der NVIDIA-Mechanismus generiert jetzt eine `.nip`-Profildatei und
+  importiert sie via `-silentImport` (offiziell dokumentiert; schreibt via
+  NVAPI `DRS_SaveSettings` in die Treiber-DB — im NVPI-Quellcode verifiziert).
+  Read-Modify-Write (Export → Mischen → Import) stellt sicher, dass **keine
+  fremden Treiberprofil-Einstellungen verloren gehen** — auch nicht im globalen
+  `Base Profile`. `nvprofile`/`gsync` brauchen jetzt Adminrechte (NVPI muss zum
+  Schreiben elevated laufen).
+- **NVIDIA-Profil: V-Sync schrieb einen ungültigen Wert.** `0x00A879CF`
+  (Vertical Sync) stand auf `0x00000000` — kein definierter Wert für dieses
+  Setting (gültig wären `0x08416747` Off / `0x47814940` On). Jetzt **`0x47814940`
+  (On)**: nach Blur-Busters-*G-SYNC-101* fügt V-Sync=On bei aktivem G-Sync +
+  FPS-Cap unter Refresh keine Latenz hinzu — es ist der Tearing-Fallback.
+- **NVIDIA-Profil: Ultra Low Latency war falsch konfiguriert.** Stand auf „On"
+  (in 0.26.0-beta von „2" auf „1" korrigiert) — recherchiert ist für ein
+  manuell gecapptes G-Sync-Setup jedoch **Off** richtig: der manuelle FPS-Cap
+  ist wirksamer als ULL, ULL Ultra setzt einen eigenen Auto-Cap (~224 FPS @
+  240 Hz, würde den 237er-Cap unterbieten), und ULL kann in CPU-bound Szenen
+  (PUBG) die Latenz erhöhen. CPL-State-Eintrag entfernt.
+
+### Added
+- **Neuer Tweak „G-Sync aktivieren".** Setzt die G-Sync-/VRR-Settings via
+  NVIDIA Profile Inspector — **globales `Base Profile`** (= NVCP-Master-Schalter:
+  Global Feature/Mode) **und** PUBG-Profil (Application Mode/State). IDs gegen
+  die NVPI-Referenz verifiziert. G-Sync ist die Voraussetzung für tearing-freies
+  Spielen ohne V-Sync-Latenz. Das Monitor-OSD (VRR/Adaptive-Sync) bleibt
+  manuell — Display-Firmware ist nicht skriptbar.
+- **G-Sync als Dashboard-Live-Check** (10. Eintrag) inkl. Empfehlungs-Card.
+- **GPU-Treiber-Anzeige.** Dashboard-Live-Check „GPU-Treiber" (Version via
+  nvidia-smi + Alter, WARN ab 90 Tagen) sowie Treiberversion/-datum im
+  Settings-Tab unter „Erkannte Hardware".
+- **Monitor-OSD/VRR-Empfehlungspanel** im Settings-Tab: dokumentiert die
+  OLED-/VRR-Einstellungen, die die Suite nicht selbst setzen kann
+  (Anti-Flicker Off, Uniform Brightness On, SDR, NVCP-G-Sync, Smooth Motion Off).
+
 ## [0.26.0-beta] - 2026-05-16
 ### Fixed
 - **CRITICAL: FPS-Cap war wirkungslos — falsche NVIDIA-Setting-ID.** Der
