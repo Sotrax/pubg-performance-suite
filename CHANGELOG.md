@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Granularer Grafik-Tab: Einzel-Dropdowns pro Setting (Anzeigemodus, AA, Schatten, Texturen ...) als Erweiterung des neuen Grafik-Tabs
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
+- GitHub Actions release pipeline
 
 ## [0.19.0-beta] - 2026-05-16
 ### Added
@@ -31,12 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   das die Release-Seite öffnet. Der Check ist bewusst fehler-tolerant
   (4 s Timeout, Exceptions werden geschluckt, noch keine Releases → kein
   Hinweis) — er darf den Start nie blockieren oder stören.
-- **GitHub-Actions-Release-Pipeline.** Neuer Workflow
-  `.github/workflows/release.yml`: ein Tag-Push (`v*`) baut ein ZIP der
-  Auslieferungs-Dateien und veröffentlicht es als GitHub Release. Die
-  Release-Notes werden aus dem passenden `## [<version>]`-Abschnitt der
-  `CHANGELOG.md` extrahiert; `-beta`/`-alpha`/`-rc`-Tags werden als
-  Prerelease markiert.
 
 ## [0.17.0-beta] - 2026-05-16
 ### Changed
