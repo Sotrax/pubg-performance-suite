@@ -30,7 +30,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.17.0-beta'
+    Version    = '0.18.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -56,6 +56,7 @@ $Global:Suite = @{
     }
     MonitorPattern = 'XB271HU'
     PUBGSteamURI   = 'steam://run/578080'
+    RepoSlug       = 'Sotrax/pubg-performance-suite'  # fuer den Update-Check
 }
 
 # ==================== FARBPALETTE ====================
@@ -123,6 +124,35 @@ function Save-SuiteConfig {
         Write-SuiteLog "Config gespeichert"
     } catch {
         Write-SuiteLog "Config-Save Fehler: $($_.Exception.Message)" 'ERROR'
+    }
+}
+
+# Fragt das neueste GitHub-Release ab und vergleicht es mit der lokalen Version.
+# Bewusst fehler-tolerant: bei Netzfehler oder noch ohne Releases gibt es einfach
+# keinen Hinweis (Rueckgabe $null) - der Update-Check darf den Start nie stoeren.
+# Verglichen wird nur der numerische Versionsteil (v0.18.0-beta -> 0.18.0).
+function Test-SuiteUpdate {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $api = "https://api.github.com/repos/$($Global:Suite.RepoSlug)/releases/latest"
+        $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'PUBG-Suite' } -TimeoutSec 4
+        $remoteTag = [string]$rel.tag_name
+        if (-not $remoteTag) { return $null }
+        # Numerischen Teil isolieren: "v0.18.0-beta" -> "0.18.0"
+        $remoteNum = $remoteTag -replace '^v','' -replace '-.*$',''
+        $localNum  = $Global:Suite.Version -replace '^v','' -replace '-.*$',''
+        $rv = $null; $lv = $null
+        if (-not [version]::TryParse($remoteNum, [ref]$rv)) { return $null }
+        if (-not [version]::TryParse($localNum,  [ref]$lv)) { return $null }
+        if ($rv -gt $lv) {
+            Write-SuiteLog "Update verfuegbar: $remoteTag (lokal v$($Global:Suite.Version))" 'INFO'
+            return [PSCustomObject]@{ Tag = $remoteTag; Url = [string]$rel.html_url }
+        }
+        Write-SuiteLog "Update-Check: aktuell (lokal v$($Global:Suite.Version), neuestes Release $remoteTag)"
+        return $null
+    } catch {
+        Write-SuiteLog "Update-Check fehlgeschlagen (unkritisch): $($_.Exception.Message)" 'WARN'
+        return $null
     }
 }
 
@@ -945,6 +975,9 @@ $xamlTemplate = @'
                     <Border Background="@@BgBase@@" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
                         <TextBlock x:Name="lblVersion" Text="v?" FontSize="10" Foreground="@@TextSecondary@@" FontWeight="SemiBold"/>
                     </Border>
+                    <Border x:Name="updateBadge" Background="@@Accent@@" CornerRadius="3" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" Cursor="Hand" ToolTip="Klick: Release-Seite auf GitHub oeffnen">
+                        <TextBlock x:Name="lblUpdate" Text="Update verfuegbar" FontSize="10" Foreground="@@BgBase@@" FontWeight="Bold"/>
+                    </Border>
                 </StackPanel>
                 <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <Border x:Name="adminBadge" Background="@@BorderStrong@@" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,8,0">
@@ -1528,7 +1561,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 
 # Control-Refs
 $ctrls = @{}
-foreach ($name in @('mainTabs','lblVersion','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblStatusSubtitle','recoList','recoEmptyState','btnStartGameMode','btnExitGameMode',
+foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin','adminBadge','lblTopStatus','btnRefresh','statusItems','lblStatusSubtitle','recoList','recoEmptyState','btnStartGameMode','btnExitGameMode',
     'btnApplySelected','btnApplyAll','btnRefreshTweaks','btnSelectAll','btnSelectNone','lblTweakInfo','tweakContainer',
     'btnFilterAll','btnFilterOpen','btnFilterDone',
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
@@ -3444,6 +3477,19 @@ $ctrls.lblVersion.Text = "v$($Global:Suite.Version)"
 $window.Title = "PUBG Performance Suite v$($Global:Suite.Version)"
 if ($ctrls.lblAboutVersion) {
     $ctrls.lblAboutVersion.Text = "  -  v$($Global:Suite.Version)"
+}
+
+# Update-Check gegen die GitHub-Releases. Fehler-tolerant (kurzer Timeout,
+# Exceptions geschluckt) - bei neuer Version erscheint ein klickbares Badge
+# im Header, das die Release-Seite oeffnet.
+$updateInfo = Test-SuiteUpdate
+if ($updateInfo) {
+    $ctrls.lblUpdate.Text = "Update: $($updateInfo.Tag)"
+    $ctrls.updateBadge.Tag = $updateInfo.Url
+    $ctrls.updateBadge.Visibility = 'Visible'
+    $ctrls.updateBadge.Add_MouseLeftButtonUp({
+        if ($this.Tag) { Start-Process ([string]$this.Tag) }
+    })
 }
 
 # Admin-Badge initial setzen
