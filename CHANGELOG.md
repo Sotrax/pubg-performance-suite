@@ -9,8 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - Granularer Grafik-Tab: Einzel-Dropdowns pro Setting (Anzeigemodus, AA, Schatten, Texturen ...) als Erweiterung des neuen Grafik-Tabs
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
-- Backup-Manager UI (browse + restore historical backups)
 - English UI localization
+
+## [0.19.0-beta] - 2026-05-16
+### Added
+- **Backup-Manager im Settings-Tab.** Neue Karte, die alle Backup-Dateien aus
+  `%LOCALAPPDATA%\PUBGSuite\backups\` auflistet (Datei, Zeitpunkt, Größe,
+  neueste zuerst). Jede Zeile hat einen „Wiederherstellen"-Button: er sichert
+  zuerst den aktuellen Stand der Zieldatei und spielt dann das Backup zurück.
+  Restore-Ziele werden über den Dateinamen erkannt (`GameUserSettings.ini`,
+  `Engine.ini`); Backups ohne bekanntes Ziel werden gelistet, ihr Button ist
+  deaktiviert (manueller Restore über „Backups öffnen"). Bisher waren Backups
+  nur über den Datei-Explorer und den per-Tweak-Revert erreichbar.
 
 ## [0.18.0-beta] - 2026-05-16
 ### Added

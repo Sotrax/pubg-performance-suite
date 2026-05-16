@@ -30,7 +30,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.18.0-beta'
+    Version    = '0.19.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1501,6 +1501,21 @@ $xamlTemplate = @'
                             </StackPanel>
                         </Border>
 
+                        <!-- Backup-Manager Card -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid>
+                                    <TextBlock Text="Backup-Manager" Style="{StaticResource SectionHeader}"/>
+                                    <Button x:Name="btnRefreshBackups" Content="Aktualisieren" HorizontalAlignment="Right" Width="140" Margin="0,-4,0,0"/>
+                                </Grid>
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
+                                    <Run Text="Jeder Grafik-/INI-Apply sichert die Originaldatei vorher. Hier laesst sich ein beliebiges Backup wiederherstellen - der aktuelle Stand der Zieldatei wird davor selbst gesichert."/>
+                                </TextBlock>
+                                <TextBlock x:Name="lblBackupInfo" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,8"/>
+                                <StackPanel x:Name="backupList"/>
+                            </StackPanel>
+                        </Border>
+
                         <!-- About Card -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -1567,6 +1582,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
+    'btnRefreshBackups','lblBackupInfo','backupList',
     'lblCapToolStatus','btnCapStart','btnCapStop','lblCapPhase',
     'lblCapLastInfo','capResultGrid','lblCapAvg','lblCap1Low','lblCap01Low','lblCapStdDev','lblCapStability',
     'lblCapBottleneck','lblCapCpuBusy','lblCapGpuBusy','lblCapRenderLat',
@@ -1957,6 +1973,128 @@ function Update-HistoryStat {
     } catch { $ctrls.lblHistoryStat.Text = '' }
 }
 
+# Mappt einen Backup-Dateinamen auf die Original-Zieldatei. Backups heissen
+# "<originalname>.bak_<yyyy-MM-dd_HHmmss>" (siehe Copy-FileToBackup) - bekannte
+# Restore-Ziele sind die zwei PUBG-INIs. Unbekannte Basis -> $null (kein Auto-Restore).
+function Get-BackupTarget {
+    param([string]$BackupFileName)
+    $base = $BackupFileName -replace '\.bak_.*$',''
+    switch ($base) {
+        'GameUserSettings.ini' { return (Get-PUBGGameUserPath) }
+        'Engine.ini'           { return (Get-PUBGEnginePath) }
+        default                { return $null }
+    }
+}
+
+# Baut die Backup-Manager-Liste im Settings-Tab: eine Zeile pro Backup-Datei
+# mit Wiederherstellen-Button. Stil analog Update-CapHistory.
+function Update-BackupList {
+    try {
+        $ctrls.backupList.Children.Clear()
+        Initialize-SuiteStorage
+        $files = @(Get-ChildItem -Path $Global:Suite.BackupDir -Filter '*.bak_*' -File -ErrorAction SilentlyContinue |
+                   Sort-Object LastWriteTime -Descending)
+        if ($files.Count -eq 0) {
+            $ctrls.lblBackupInfo.Text = 'Noch keine Backups vorhanden - sie entstehen automatisch beim ersten Grafik-/INI-Apply.'
+            return
+        }
+        $ctrls.lblBackupInfo.Text = "$($files.Count) Backup(s) - neueste zuerst."
+
+        # Spalten: Datei(190) | Zeitpunkt(150) | Groesse(75) | Aktion(150)
+        $colWidths = @(190,150,75,150)
+        $hdr = New-Object System.Windows.Controls.Border
+        $hdr.Background = $Global:SuiteColors.BgBase
+        $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+        $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
+        $hdrGrid = New-Object System.Windows.Controls.Grid
+        $hdr.Child = $hdrGrid
+        foreach ($w in $colWidths) {
+            $cd = New-Object System.Windows.Controls.ColumnDefinition
+            $cd.Width = $w; $hdrGrid.ColumnDefinitions.Add($cd) | Out-Null
+        }
+        $hdrTexts = @('DATEI','ZEITPUNKT','GROESSE','')
+        for ($i = 0; $i -lt $hdrTexts.Count; $i++) {
+            $tb = New-Object System.Windows.Controls.TextBlock
+            $tb.Text = $hdrTexts[$i]; $tb.Foreground = $Global:SuiteColors.TextSecondary
+            $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
+            [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+            $hdrGrid.Children.Add($tb) | Out-Null
+        }
+        $ctrls.backupList.Children.Add($hdr) | Out-Null
+
+        foreach ($f in $files) {
+            try {
+                $base = $f.Name -replace '\.bak_.*$',''
+                # Zeitstempel aus dem Namen ziehen, sonst LastWriteTime
+                $tsStr = if ($f.Name -match '\.bak_(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$') {
+                    "$($matches[1]) $($matches[2]):$($matches[3]):$($matches[4])"
+                } else { $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $sizeKb = [math]::Round($f.Length / 1KB, 1)
+                $target = Get-BackupTarget $f.Name
+
+                $row = New-Object System.Windows.Controls.Border
+                $row.Background = $Global:SuiteColors.Surface1
+                $row.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+                $row.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
+                $row.CornerRadius = (New-Object System.Windows.CornerRadius 2)
+                $grid = New-Object System.Windows.Controls.Grid
+                $row.Child = $grid
+                foreach ($w in $colWidths) {
+                    $cd = New-Object System.Windows.Controls.ColumnDefinition
+                    $cd.Width = $w; $grid.ColumnDefinitions.Add($cd) | Out-Null
+                }
+
+                $texts = @($base, $tsStr, "$sizeKb KB")
+                for ($i = 0; $i -lt 3; $i++) {
+                    $tb = New-Object System.Windows.Controls.TextBlock
+                    $tb.Text = "$($texts[$i])"; $tb.Foreground = $Global:SuiteColors.TextPrimary
+                    $tb.FontSize = 11; $tb.VerticalAlignment = 'Center'
+                    $tb.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
+                    [System.Windows.Controls.Grid]::SetColumn($tb, $i)
+                    $grid.Children.Add($tb) | Out-Null
+                }
+
+                $btn = New-Object System.Windows.Controls.Button
+                $btn.Content = 'Wiederherstellen'
+                $btn.FontSize = 11; $btn.Height = 24; $btn.Width = 140
+                $btn.HorizontalAlignment = 'Left'
+                if ($target) {
+                    # Restore-Kontext an den Button haengen (kein Closure ueber Loop-Variable)
+                    $btn.Tag = [PSCustomObject]@{ BackupPath = $f.FullName; BackupName = $f.Name; Target = $target }
+                    $btn.Add_Click({
+                        $info = $this.Tag
+                        $confirm = [System.Windows.MessageBox]::Show(
+                            "Backup wiederherstellen?`n`nDatei:  $($info.BackupName)`nZiel:   $($info.Target)`n`nDer aktuelle Stand der Zieldatei wird vorher gesichert.`nPUBG muss geschlossen sein.",
+                            'Backup wiederherstellen', 'YesNo', 'Warning')
+                        if ($confirm -ne 'Yes') { return }
+                        if (Test-Path $info.Target) { Copy-FileToBackup -SourcePath $info.Target | Out-Null }
+                        $ok = Restore-FileFromBackup -BackupPath $info.BackupPath -TargetPath $info.Target
+                        if ($ok) {
+                            Write-SuiteLog "Backup wiederhergestellt: $($info.BackupName) -> $($info.Target)" 'INFO'
+                            [System.Windows.MessageBox]::Show('Backup wiederhergestellt.', 'OK', 'OK', 'Information') | Out-Null
+                            Update-BackupList
+                            Update-GraphicsTab
+                        } else {
+                            [System.Windows.MessageBox]::Show('Wiederherstellung fehlgeschlagen - siehe Log.', 'Fehler', 'OK', 'Error') | Out-Null
+                        }
+                    })
+                } else {
+                    $btn.IsEnabled = $false
+                    $btn.ToolTip = 'Ziel unbekannt - manuell aus dem Backups-Ordner zuruecksichern'
+                }
+                [System.Windows.Controls.Grid]::SetColumn($btn, 3)
+                $grid.Children.Add($btn) | Out-Null
+
+                $ctrls.backupList.Children.Add($row) | Out-Null
+            } catch {
+                Write-SuiteLog "Update-BackupList Row-Render Fehler: $($_.Exception.Message)" 'WARN'
+            }
+        }
+    } catch {
+        Write-SuiteLog "Update-BackupList Fehler: $($_.Exception.Message)" 'ERROR'
+    }
+}
+
 $ctrls.btnOpenLogs.Add_Click({
     Initialize-SuiteStorage
     Start-Process explorer.exe -ArgumentList $Global:Suite.LogDir
@@ -1965,6 +2103,7 @@ $ctrls.btnOpenBackups.Add_Click({
     Initialize-SuiteStorage
     Start-Process explorer.exe -ArgumentList $Global:Suite.BackupDir
 })
+$ctrls.btnRefreshBackups.Add_Click({ Update-BackupList })
 $ctrls.btnClearHistory.Add_Click({
     $confirm = [System.Windows.MessageBox]::Show("History komplett loeschen?`n`nDanach koennen bisher applizierte Tweaks NICHT mehr per Knopf reverted werden.`n(Backups in $($Global:Suite.BackupDir) bleiben erhalten - manueller Revert weiter moeglich)", 'History loeschen', 'YesNo', 'Warning')
     if ($confirm -eq 'Yes') {
@@ -1976,6 +2115,7 @@ $ctrls.btnClearHistory.Add_Click({
     }
 })
 Update-HistoryStat
+Update-BackupList
 $ctrls.btnAutoPattern.Add_Click({
     $mmt = Get-MMTPath
     if (-not $mmt) {
