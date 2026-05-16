@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.22.0-beta'
+    Version    = '0.23.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -1014,6 +1014,27 @@ $xamlTemplate = @'
             <Setter Property="Foreground" Value="@@TextPrimary@@"/>
             <Setter Property="Padding" Value="6,4"/>
             <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ItemBorder"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="@@BorderStrong@@"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="@@Accent@@"/>
+                                <Setter Property="Foreground" Value="@@BgBase@@"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="@@Surface1@@"/>
@@ -1732,22 +1753,19 @@ $xamlTemplate = @'
                         <!-- Keygen-Card -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="PUBG SUITE PRO - Lizenzschluessel-Generator" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"
-                                           Text="Reine Nostalgie-Deko im Stil der alten Szene-Keygens - erzeugt dekorative Zufalls-Codes voellig ohne Funktion. Knackt nichts, schaltet nichts frei. Just for the vibe."/>
+                                <TextBlock Text="PUBG SUITE PRO  -  LIZENZSCHLUESSEL-GENERATOR" Style="{StaticResource SectionHeader}"/>
 
-                                <Border Background="@@BgBase@@" CornerRadius="4" Padding="16,18" Margin="0,0,0,12">
+                                <Border Background="@@BgBase@@" CornerRadius="4" Padding="16,20" Margin="0,4,0,14">
                                     <StackPanel>
-                                        <TextBlock Text="DEIN LIZENZSCHLUESSEL" Foreground="@@TextDisabled@@" FontSize="10" FontWeight="SemiBold" TextAlignment="Center"/>
-                                        <TextBlock x:Name="lblKeygenCode" Text="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" FontFamily="Consolas" FontSize="24" FontWeight="Bold" Foreground="@@Accent@@" TextAlignment="Center" Margin="0,6,0,0"/>
-                                        <TextBlock x:Name="lblKeygenStatus" Text="Bereit. Klick GENERATE." Foreground="@@TextSecondary@@" FontSize="11" TextAlignment="Center" Margin="0,8,0,0"/>
+                                        <TextBlock Text="- - - -   D E I N   L I Z E N Z S C H L U E S S E L   - - - -" Foreground="@@TextDisabled@@" FontSize="10" FontWeight="SemiBold" TextAlignment="Center"/>
+                                        <TextBlock x:Name="lblKeygenCode" Text="XXXXXX-XXXXXX-XXXXXX-XXXXXX" FontFamily="Consolas" FontSize="26" FontWeight="Bold" Foreground="@@Accent@@" TextAlignment="Center" Margin="0,10,0,2"/>
+                                        <TextBlock x:Name="lblKeygenStatus" Text="BEREIT  -  KLICK GENERATE" FontFamily="Consolas" Foreground="@@TextSecondary@@" FontSize="11" TextAlignment="Center" Margin="0,10,0,0"/>
                                     </StackPanel>
                                 </Border>
 
-                                <StackPanel Orientation="Horizontal">
-                                    <Button x:Name="btnKeygenGenerate" Content="*  GENERATE  *" Style="{StaticResource SuccessButton}" Width="200" Height="44" FontWeight="Bold" Margin="0,0,8,0"/>
-                                    <Button x:Name="btnKeygenFormat" Content="Format: 6 x 4" Width="150" Height="44" Margin="0,0,8,0"/>
-                                    <Button x:Name="btnKeygenMusic" Content="MUSIK: AUS" Width="150" Height="44"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button x:Name="btnKeygenGenerate" Content="*  GENERATE  *" Style="{StaticResource SuccessButton}" Width="260" Height="46" FontWeight="Bold" Margin="0,0,10,0"/>
+                                    <Button x:Name="btnKeygenMusic" Content="MUSIK: AUS" Width="160" Height="46"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -1804,7 +1822,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'btnRunDiag','btnOpenHTML','btnOpenReports','txtDiagOutput',
     'cbMonitors','cbRTSS','cbBackground','cbTimer','cbLaunch','btnGMStart','btnGMExit','txtGMLog',
     'lblPaths','tbMonitorPattern','lblFooter','lblAboutVersion',
-    'lblKeygenArt','lblKeygenCode','lblKeygenStatus','btnKeygenGenerate','btnKeygenFormat','btnKeygenMusic','lblKeygenGreetz')) {
+    'lblKeygenArt','lblKeygenCode','lblKeygenStatus','btnKeygenGenerate','btnKeygenMusic','lblKeygenGreetz')) {
     $ctrls[$name] = $window.FindName($name)
 }
 
@@ -3936,7 +3954,7 @@ if ($hist.Count -gt 0) {
 # ==================== KEY GEN (Retro-Spass-Tab) ====================
 # Reine Deko - generiert funktionslose Zufalls-Codes und spielt eine 8-bit-
 # Loop-Melodie via [Console]::Beep. Hommage an die alten Szene-Keygens.
-$Global:KeygenState   = @{ Groups = 6; Len = 4; RollTimer = $null }
+$Global:KeygenState   = @{ Groups = 4; Len = 6; RollTimer = $null }
 $Global:KeygenRandom  = New-Object System.Random
 $Global:KeygenCharset = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.ToCharArray()
 # Thread-uebergreifend geteilter Musik-Zustand (synchronized -> sicher zwischen
@@ -3958,7 +3976,7 @@ function New-KeygenCode {
 # Kurze "Roll"-Animation (Code rattert), dann settle auf den finalen Code.
 function Invoke-KeygenGenerate {
     if ($Global:KeygenState.RollTimer) { $Global:KeygenState.RollTimer.Stop() }
-    $ctrls.lblKeygenStatus.Text = 'Generiere...'
+    $ctrls.lblKeygenStatus.Text = 'GENERIERE SCHLUESSEL ...'
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(45)
     $timer.Tag = 0
@@ -3967,7 +3985,7 @@ function Invoke-KeygenGenerate {
         $ctrls.lblKeygenCode.Text = New-KeygenCode -Groups $Global:KeygenState.Groups -Len $Global:KeygenState.Len
         if ([int]$this.Tag -ge 12) {
             $this.Stop()
-            $ctrls.lblKeygenStatus.Text = "Schluessel generiert  -  $(Get-Date -Format 'HH:mm:ss')  -  [ cracked 4 the lulz ]"
+            $ctrls.lblKeygenStatus.Text = "LIZENZSCHLUESSEL GENERIERT  -  $(Get-Date -Format 'HH:mm:ss')  -  STATUS: GUELTIG"
         }
     })
     $Global:KeygenState.RollTimer = $timer
@@ -3992,14 +4010,27 @@ function Start-KeygenMusic {
         $ps = [PowerShell]::Create()
         $ps.Runspace = $rs
         [void]$ps.AddScript({
-            # Melodie als Paare @(Frequenz_Hz, Dauer_ms); Frequenz 0 = Pause.
+            # Authentischer Keygen-Chiptune im Tracker-Stil. Drei Sektionen:
+            # schnelle Arpeggios (fingieren Akkorde auf einem Kanal), eine
+            # Lead-Melodie und ein Bass/Melodie-Wechsel. Akkordfolge Am-F-C-G.
+            # Paare @(Frequenz_Hz, Dauer_ms); Frequenz 0 = Pause.
             $melody = @(
-                @(523,140),@(659,140),@(784,140),@(659,140),
-                @(523,140),@(659,140),@(784,260),@(0,70),
-                @(587,140),@(698,140),@(880,140),@(698,140),
-                @(587,140),@(698,140),@(880,260),@(0,70),
-                @(523,150),@(440,150),@(523,150),@(659,150),
-                @(784,300),@(659,150),@(523,300),@(0,160)
+                # -- Arpeggio-Lauf (Am F C G), 16tel ---------------------------
+                @(440,52),@(523,52),@(659,52),@(880,52),@(659,52),@(523,52),@(440,52),@(330,52),
+                @(349,52),@(440,52),@(523,52),@(698,52),@(523,52),@(440,52),@(349,52),@(262,52),
+                @(262,52),@(330,52),@(392,52),@(523,52),@(392,52),@(330,52),@(262,52),@(196,52),
+                @(196,52),@(247,52),@(294,52),@(392,52),@(294,52),@(247,52),@(196,52),@(294,52),
+                # -- Lead-Melodie ----------------------------------------------
+                @(659,150),@(0,40),@(440,150),@(523,150),@(659,210),@(0,60),
+                @(698,150),@(659,150),@(587,150),@(523,210),@(0,60),
+                @(659,150),@(784,150),@(659,150),@(523,210),@(0,60),
+                @(587,150),@(494,150),@(392,150),@(494,150),@(587,260),@(0,90),
+                # -- Bass/Melodie-Wechsel (Tracker-Feel) -----------------------
+                @(110,66),@(440,66),@(110,66),@(523,66),@(110,66),@(659,66),@(110,66),@(523,66),
+                @(175,66),@(440,66),@(175,66),@(523,66),@(175,66),@(698,66),@(175,66),@(523,66),
+                @(131,66),@(659,66),@(131,66),@(392,66),@(131,66),@(523,66),@(131,66),@(659,66),
+                @(196,66),@(587,66),@(196,66),@(494,66),@(196,66),@(392,66),@(196,66),@(587,66),
+                @(0,140)
             )
             while ($Audio.Running) {
                 foreach ($n in $melody) {
@@ -4025,17 +4056,6 @@ function Stop-KeygenMusic {
 }
 
 $ctrls.btnKeygenGenerate.Add_Click({ Invoke-KeygenGenerate })
-
-$ctrls.btnKeygenFormat.Add_Click({
-    if ($Global:KeygenState.Groups -eq 6) {
-        $Global:KeygenState.Groups = 8; $Global:KeygenState.Len = 3
-        $ctrls.btnKeygenFormat.Content = 'Format: 8 x 3'
-    } else {
-        $Global:KeygenState.Groups = 6; $Global:KeygenState.Len = 4
-        $ctrls.btnKeygenFormat.Content = 'Format: 6 x 4'
-    }
-    Invoke-KeygenGenerate
-})
 
 $ctrls.btnKeygenMusic.Add_Click({
     if ($Global:KeygenAudio.Running) {
@@ -4063,10 +4083,13 @@ $ctrls.mainTabs.Add_SelectionChanged({
 
 # ASCII-Art-Header (reines ASCII - keine Encoding-Risiken)
 $ctrls.lblKeygenArt.Text = @'
-==================================================
-       P U B G   S U I T E   ::   K E Y G E N
-       - scene release  //  2026 edition -
-==================================================
+ ____   _   _  ____    ____
+|  _ \ | | | || __ )  / ___|
+| |_) || | | ||  _ \ | |  _
+|  __/ | |_| || |_) || |_| |
+|_|     \___/ |____/  \____|
+   S U I T E   ::   K E Y G E N
+   - 2026 release  //  100% working -
 '@
 
 # Greetz-Scroller (DispatcherTimer schiebt den String zeichenweise)

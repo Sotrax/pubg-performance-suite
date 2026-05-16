@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.23.0-beta] - 2026-05-16
+### Fixed
+- **Grafik-Tab: ausgewählte Dropdown-Einträge waren nicht lesbar.** Die
+  `ComboBox`-/`ComboBoxItem`-Styles setzten nur `Background`/`Foreground` als
+  einfache Setter — das WPF-Standard-Template zeichnet die Auswahl jedoch über
+  eigene Template-Trigger mit einem hellen System-Highlight. Ergebnis: heller
+  Hintergrund auf hellem Text, der ausgewählte Eintrag praktisch weiß-auf-weiß.
+  `ComboBoxItem` bekommt jetzt ein eigenes `ControlTemplate`: ausgewählt =
+  Akzent-Blau mit dunklem Text, Hover = neutrale Aufhellung — sauberer Kontrast.
+
+### Changed
+- **Key-Gen-Tab überarbeitet — glaubwürdiger Szene-Keygen-Look.** Der
+  Format-Umschalter (6×4 ↔ 8×3) ist entfernt; das Format ist jetzt fix auf
+  **4×6 Zeichen** (`XXXXXX-XXXXXX-XXXXXX-XXXXXX`) — das klassische Serial-Layout.
+  Der Disclaimer-Text und der „cracked 4 the lulz"-Status sind raus; der
+  Status meldet jetzt gerade `STATUS: GUELTIG`. Neuer ASCII-Block-Header
+  („PUBG"-Logo, `100% working`).
+- **Keygen-Musik komplett neu.** Statt einer simplen Dur-Tonleiter jetzt ein
+  Tracker-Chiptune-Loop im Stil der alten .MOD-Cracktros: schnelle Arpeggios
+  (fingieren Akkorde auf dem einen `[Console]::Beep`-Kanal), eine Lead-Melodie
+  und ein Bass/Melodie-Wechsel. Akkordfolge Am-F-C-G, Loop ~6,4 s.
+
 ## [0.22.0-beta] - 2026-05-16
 ### Added
 - **„Key Gen"-Tab (Retro-Spaß-Easter-Egg).** Bewusster Stil-Bruch zum sonst
