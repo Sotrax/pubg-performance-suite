@@ -15,6 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release pipeline
 - Capture: comparison view (delta vs previous)
 
+## [0.16.0-beta] - 2026-05-16
+### Changed
+- **Neues Farbschema (Look & Feel).** Komplett überarbeitete dunkle Palette
+  nach WCAG-AA-Vorgaben: kein reines Schwarz mehr, Tiefe über progressiv
+  hellere Flächen-Ebenen statt Schatten, entsättigte Status-Farben statt Neon,
+  kühles Blau (`#4DA3FF`) als einziger Akzent für primäre Aktionen, aktiven Tab
+  und Sektions-Überschriften. Alle Text-auf-Fläche-Kombinationen auf ≥ 4.5:1
+  Kontrast geprüft.
+- **Farben zentralisiert.** Die ~300 vorher quer durch Code und XAML
+  hartcodierten Hex-Werte laufen jetzt über eine einzige Palette
+  `$Global:SuiteColors` (19 benannte Tokens). Das XAML referenziert sie über
+  `@@Token@@`-Platzhalter, die beim Fenster-Aufbau aufgelöst werden — eine
+  Quelle für UI-Styling und dynamische Status-Farben.
+
+### Removed
+- **Toter Code.** 151 Zeilen aus `PUBG-Suite.ps1` entfernt: die seit dem
+  0.14.0-Refactor verwaisten NPI-Funktionen (`Get-NPIPath`,
+  `Install-NPIFromGitHub`, `Invoke-NPIPubgProfile`) und Registry-Snapshot-Helfer
+  (`Get-RegistrySnapshot`, `Restore-RegistrySnapshot`) — die aktiv genutzten
+  Kopien liegen im Tweak-Registry-Modul. Beseitigt zugleich eine doppelte,
+  divergenz-anfällige Kopie der 8 NVIDIA-Profil-Settings.
+
+### Fixed
+- **Verschluckte Fehler.** 13 leere `catch {}`-Blöcke überarbeitet: vier loggen
+  jetzt eine `WARN`-Meldung statt Fehler still zu schlucken (ungültiges
+  Config-JSON, fehlgeschlagene ReadOnly-Flag-Operationen, fehlgeschlagene
+  Capture-Re-Analyse), die übrigen haben einen Kommentar, der das bewusste
+  Ignorieren begründet.
+
 ## [0.15.0-beta] - 2026-05-16
 ### Added
 - **Diagnose: Audio-Hinweise.** Neuer Report-Abschnitt „Audio" mit `MANUELL`-

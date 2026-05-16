@@ -23,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
-    Version    = '0.15.0-beta'
+    Version    = '0.16.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -51,6 +51,35 @@ $Global:Suite = @{
     PUBGSteamURI   = 'steam://run/578080'
 }
 
+# ==================== FARBPALETTE ====================
+# Single Source of Truth fuer ALLE Farben - UI wie dynamische Status-Farben.
+# Im XAML referenziert ueber @@Token@@-Platzhalter (werden beim XAML-Build
+# aufgeloest), im PowerShell-Code direkt via $Global:SuiteColors.<Token>.
+# Dunkles Schema nach WCAG-AA: kein reines Schwarz, Tiefe ueber progressiv
+# hellere Flaechen-Ebenen statt Schatten, entsaettigte Status-Farben.
+# Alle Text-auf-Flaeche-Paare gegen #1A1D23 auf >=4.5:1 geprueft.
+$Global:SuiteColors = [ordered]@{
+    BgBase           = '#14171C'   # App-Hintergrund, eingelassene Kacheln
+    Surface1         = '#1A1D23'   # Karten, Tabs, Header/Footer, Tabellenzeilen
+    Surface2         = '#22262E'   # Hover, Popups, Menues
+    BorderSubtle     = '#2E333D'   # Trennlinien, Karten-Rahmen
+    BorderStrong     = '#3C424E'   # Eingabefelder, neutrale Badges, inaktive Buttons
+    TextPrimary      = '#E6E8EB'   # Ueberschriften, Werte, Fliesstext (87% Weiss)
+    TextSecondary    = '#A2A8B4'   # Labels, Captions, Beschreibungen (60%)
+    TextDisabled     = '#6B7280'   # Deaktiviert, Mini-Sublabels, Footer (38%)
+    Accent           = '#4DA3FF'   # Primaer-Aktion, aktiver Tab, Links, Sektions-Header
+    AccentHover      = '#6FB6FF'   # Hover/Pressed des Akzents
+    StatusBest       = '#74D98C'   # Bestnote (heller als OK)
+    StatusOK         = '#56C271'   # OK / optimiert / Erfolg-Buttons
+    StatusOKHover    = '#6FCF86'   # Hover der Erfolg-Buttons
+    StatusWarn       = '#E0A33E'   # Warnung / suboptimal
+    StatusError      = '#E5645B'   # Fehler / Risiko / Danger-Buttons
+    StatusErrorHover = '#ED7E76'   # Hover der Danger-Buttons
+    OkBg             = '#1E2A22'   # gruen getoenter Badge-Hintergrund
+    WarnBg           = '#2C2519'   # amber getoenter Badge-Hintergrund
+    InfoBg           = '#1B2731'   # blau getoenter Badge-Hintergrund
+}
+
 # ==================== STORAGE LAYER (Config / Log / History) ====================
 function Initialize-SuiteStorage {
     foreach ($d in $Global:Suite.StateDir, $Global:Suite.LogDir, $Global:Suite.BackupDir, $Global:Suite.CaptureDir) {
@@ -65,12 +94,13 @@ function Write-SuiteLog {
         $logFile = Join-Path $Global:Suite.LogDir "$(Get-Date -Format 'yyyy-MM-dd').log"
         $ts = Get-Date -Format 'HH:mm:ss.fff'
         "[$ts] [$Level] $Message" | Add-Content -Path $logFile -Encoding UTF8 -ErrorAction SilentlyContinue
-    } catch {}
+    } catch {}  # Logging selbst darf nie werfen - sonst Endlosrekursion
 }
 
 function Get-SuiteConfig {
     if (Test-Path $Global:Suite.ConfigFile) {
-        try { return Get-Content $Global:Suite.ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+        try { return Get-Content $Global:Suite.ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+        catch { Write-SuiteLog "Get-SuiteConfig: Config unlesbar oder ungueltiges JSON - nutze Defaults ($($_.Exception.Message))" 'WARN' }
     }
     return [PSCustomObject]@{
         MonitorPattern = 'XB271HU'
@@ -166,50 +196,6 @@ function Get-LastSnapshot {
 }
 
 # ==================== SNAPSHOT HELPERS ====================
-function Get-RegistrySnapshot {
-    param([string]$Path, [string]$Name)
-    try {
-        $regPath = $Path -replace '^HKCU:','HKEY_CURRENT_USER' -replace '^HKLM:','HKEY_LOCAL_MACHINE'
-        if (-not (Test-Path $Path)) {
-            return @{ Path=$Path; Name=$Name; HadKey=$false; HadValue=$false; OldValue=$null; ValueKind='None' }
-        }
-        $key = Get-Item -Path $Path -ErrorAction Stop
-        $val = $key.GetValue($Name, $null)
-        $kind = if ($null -ne $val) { [string]$key.GetValueKind($Name) } else { 'None' }
-        return @{ Path=$Path; Name=$Name; HadKey=$true; HadValue=($null -ne $val); OldValue=$val; ValueKind=$kind }
-    } catch {
-        return @{ Path=$Path; Name=$Name; HadKey=$false; HadValue=$false; OldValue=$null; ValueKind='None' }
-    }
-}
-
-function Restore-RegistrySnapshot {
-    param($Snap)
-    try {
-        if (-not $Snap.HadKey -or -not $Snap.HadValue) {
-            # Vor Apply existierte der Wert nicht -> loeschen
-            if (Test-Path $Snap.Path) {
-                Remove-ItemProperty -Path $Snap.Path -Name $Snap.Name -ErrorAction SilentlyContinue
-            }
-            return $true
-        }
-        $type = switch ($Snap.ValueKind) {
-            'DWord'  { 'DWord' }
-            'QWord'  { 'QWord' }
-            'String' { 'String' }
-            'ExpandString' { 'ExpandString' }
-            'MultiString' { 'MultiString' }
-            'Binary' { 'Binary' }
-            default  { 'String' }
-        }
-        if (-not (Test-Path $Snap.Path)) { New-Item -Path $Snap.Path -Force -ErrorAction Stop | Out-Null }
-        Set-ItemProperty -Path $Snap.Path -Name $Snap.Name -Value $Snap.OldValue -Type $type -ErrorAction Stop
-        return $true
-    } catch {
-        Write-SuiteLog "Restore-RegistrySnapshot Fehler: $($_.Exception.Message)" 'ERROR'
-        return $false
-    }
-}
-
 function Copy-FileToBackup {
     param([string]$SourcePath)
     if (-not (Test-Path $SourcePath)) { return $null }
@@ -293,7 +279,7 @@ function Get-LiveStatus {
         $hasSharpen = $c -match 'r\.Tonemapper\.Sharpen\s*=\s*0\.7'
         $hasStreaming = $c -match 'r\.Streaming\.PoolSize\s*=\s*4096'
         $isReadOnly = $false
-        try { $isReadOnly = ((Get-Item $eng -Force).Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0 } catch {}
+        try { $isReadOnly = ((Get-Item $eng -Force).Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0 } catch {}  # best-effort: bleibt $false wenn nicht ermittelbar
         if ($hasSharpen -and $hasStreaming) {
             $lbl = if ($isReadOnly) { 'Tweaks drin (geschuetzt)' } else { 'Tweaks drin' }
             $s['Engine.ini'] = @{ Value=$lbl; Status='OK' }
@@ -386,7 +372,7 @@ function Get-PrimaryMonitorHz {
             Sort-Object -Property CurrentRefreshRate -Descending |
             Select-Object -First 1).CurrentRefreshRate
         if ($hz -and $hz -gt 0) { return [int]$hz }
-    } catch {}
+    } catch {}  # CIM-Abfrage fehlgeschlagen -> Fallback unten greift
     return 240  # Fallback
 }
 
@@ -447,7 +433,9 @@ function Update-IniValue {
             $fi.Attributes = $fi.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
             $wasReadOnly = $true
         }
-    } catch {}
+    } catch {
+        Write-SuiteLog "Update-IniValue: ReadOnly-Flag konnte nicht entfernt werden ($($_.Exception.Message)) - Write koennte scheitern" 'WARN'
+    }
     try {
         Set-Content -Path $Path -Value $content -NoNewline -Encoding UTF8 -ErrorAction Stop
         # Wenn die Datei vorher schon ReadOnly war (Apply re-run), Flag wiederherstellen
@@ -455,7 +443,9 @@ function Update-IniValue {
             try {
                 $fi2 = Get-Item $Path -Force
                 $fi2.Attributes = $fi2.Attributes -bor [System.IO.FileAttributes]::ReadOnly
-            } catch {}
+            } catch {
+                Write-SuiteLog "Update-IniValue: ReadOnly-Flag konnte nicht wiederhergestellt werden ($($_.Exception.Message))" 'WARN'
+            }
         }
         return $true
     } catch {
@@ -463,8 +453,6 @@ function Update-IniValue {
         return $false
     }
 }
-
-$timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 
 # ==================== GETEILTE KONFIGURATION (PROFIL + TWEAK-REGISTRY) ========
 # Single Source of Truth: das PUBG-Grafikprofil und die Tweak-Registry liegen
@@ -568,8 +556,8 @@ function Test-EsportGfxProfile {
             # Float-tolerant: '100.000000' == '100', PowerShell-[double]-Cast ist
             # kultur-invariant (Dezimalpunkt). Bools wie 'False' werfen -> String-Vergleich.
             $wantNum = $null; $haveNum = $null
-            try { $wantNum = [double]$want } catch {}
-            try { $haveNum = [double]$have } catch {}
+            try { $wantNum = [double]$want } catch {}  # nicht-numerisch (z.B. 'False') -> bleibt $null, String-Vergleich greift
+            try { $haveNum = [double]$have } catch {}  # dito
             if ($null -ne $wantNum -and $null -ne $haveNum) {
                 if ([math]::Floor($wantNum) -ne [math]::Floor($haveNum)) { $mismatch += $key }
             } elseif ($want -ne $have) {
@@ -844,16 +832,16 @@ function Stop-GameMode {
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 
-[xml]$xaml = @'
+$xamlTemplate = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="PUBG Performance Suite" Height="700" Width="1050"
-        Background="#0f1115" WindowStartupLocation="CenterScreen">
+        Background="@@BgBase@@" WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <Style TargetType="TabItem">
-            <Setter Property="Background" Value="#1a1d23"/>
-            <Setter Property="Foreground" Value="#e5e7eb"/>
-            <Setter Property="BorderBrush" Value="#2d3139"/>
+            <Setter Property="Background" Value="@@Surface1@@"/>
+            <Setter Property="Foreground" Value="@@TextPrimary@@"/>
+            <Setter Property="BorderBrush" Value="@@BorderSubtle@@"/>
             <Setter Property="Padding" Value="16,8"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -863,11 +851,11 @@ Add-Type -AssemblyName System.Windows.Forms
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Border" Property="BorderBrush" Value="#60a5fa"/>
-                                <Setter Property="Foreground" Value="#60a5fa"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="@@Accent@@"/>
+                                <Setter Property="Foreground" Value="@@Accent@@"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Foreground" Value="#93c5fd"/>
+                                <Setter Property="Foreground" Value="@@AccentHover@@"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -875,7 +863,7 @@ Add-Type -AssemblyName System.Windows.Forms
             </Setter>
         </Style>
         <Style TargetType="Button">
-            <Setter Property="Background" Value="#2563eb"/>
+            <Setter Property="Background" Value="@@Accent@@"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="12,0"/>
@@ -895,41 +883,41 @@ Add-Type -AssemblyName System.Windows.Forms
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#3b82f6"/>
+                    <Setter Property="Background" Value="@@AccentHover@@"/>
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Background" Value="#374151"/>
-                    <Setter Property="Foreground" Value="#9ca3af"/>
+                    <Setter Property="Background" Value="@@BorderStrong@@"/>
+                    <Setter Property="Foreground" Value="@@TextSecondary@@"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="#93c5fd"/>
+            <Setter Property="Foreground" Value="@@Accent@@"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
         <Style x:Key="Card" TargetType="Border">
-            <Setter Property="Background" Value="#1a1d23"/>
-            <Setter Property="BorderBrush" Value="#2d3139"/>
+            <Setter Property="Background" Value="@@Surface1@@"/>
+            <Setter Property="BorderBrush" Value="@@BorderSubtle@@"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CornerRadius" Value="6"/>
             <Setter Property="Padding" Value="16"/>
             <Setter Property="Margin" Value="0,0,0,14"/>
         </Style>
         <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#dc2626"/>
+            <Setter Property="Background" Value="@@StatusError@@"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#ef4444"/>
+                    <Setter Property="Background" Value="@@StatusErrorHover@@"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="SuccessButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#16a34a"/>
+            <Setter Property="Background" Value="@@StatusOK@@"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#22c55e"/>
+                    <Setter Property="Background" Value="@@StatusOKHover@@"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -943,22 +931,22 @@ Add-Type -AssemblyName System.Windows.Forms
         </Grid.RowDefinitions>
 
         <!-- Header -->
-        <Border Grid.Row="0" Background="#1a1d23" BorderBrush="#2d3139" BorderThickness="0,0,0,1" Padding="20,10">
+        <Border Grid.Row="0" Background="@@Surface1@@" BorderBrush="@@BorderSubtle@@" BorderThickness="0,0,0,1" Padding="20,10">
             <Grid>
                 <StackPanel HorizontalAlignment="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="PUBG PERFORMANCE SUITE" FontSize="17" FontWeight="Bold" Foreground="#60a5fa" VerticalAlignment="Center"/>
-                    <Border Background="#0f1115" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="lblVersion" Text="v?" FontSize="10" Foreground="#9ca3af" FontWeight="SemiBold"/>
+                    <TextBlock Text="PUBG PERFORMANCE SUITE" FontSize="17" FontWeight="Bold" Foreground="@@Accent@@" VerticalAlignment="Center"/>
+                    <Border Background="@@BgBase@@" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="lblVersion" Text="v?" FontSize="10" Foreground="@@TextSecondary@@" FontWeight="SemiBold"/>
                     </Border>
                 </StackPanel>
                 <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border x:Name="adminBadge" Background="#374151" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,8,0">
-                        <TextBlock x:Name="lblAdmin" Text="Admin: ?" Foreground="#e5e7eb" FontSize="10" FontWeight="SemiBold"/>
+                    <Border x:Name="adminBadge" Background="@@BorderStrong@@" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,8,0">
+                        <TextBlock x:Name="lblAdmin" Text="Admin: ?" Foreground="@@TextPrimary@@" FontSize="10" FontWeight="SemiBold"/>
                     </Border>
-                    <Border Background="#0f1115" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Border Background="@@BgBase@@" CornerRadius="3" Padding="8,3" VerticalAlignment="Center" Margin="0,0,12,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Status: " Foreground="#9ca3af" FontSize="11" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="lblTopStatus" Text="-/-" Foreground="#e5e7eb" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <TextBlock Text="Status: " Foreground="@@TextSecondary@@" FontSize="11" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="lblTopStatus" Text="-/-" Foreground="@@TextPrimary@@" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                     <Button x:Name="btnRefresh" Content="↻ Refresh" Width="100"/>
@@ -967,14 +955,14 @@ Add-Type -AssemblyName System.Windows.Forms
         </Border>
 
         <!-- Tabs -->
-        <TabControl x:Name="mainTabs" Grid.Row="1" Background="#0f1115" BorderThickness="0" Padding="0">
+        <TabControl x:Name="mainTabs" Grid.Row="1" Background="@@BgBase@@" BorderThickness="0" Padding="0">
             <!-- TAB 1: DASHBOARD -->
             <TabItem Header="Dashboard">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Background="#0f1115">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Background="@@BgBase@@">
                     <StackPanel Margin="20">
                         <Grid Margin="0,0,0,10">
-                            <TextBlock Text="Live Status" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" HorizontalAlignment="Left"/>
-                            <TextBlock x:Name="lblStatusSubtitle" Text="" FontSize="11" Foreground="#6b7280" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            <TextBlock Text="Live Status" FontSize="14" FontWeight="Bold" Foreground="@@Accent@@" HorizontalAlignment="Left"/>
+                            <TextBlock x:Name="lblStatusSubtitle" Text="" FontSize="11" Foreground="@@TextDisabled@@" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                         </Grid>
                         <ItemsControl x:Name="statusItems">
                             <ItemsControl.ItemsPanel>
@@ -984,9 +972,9 @@ Add-Type -AssemblyName System.Windows.Forms
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Background="#1a1d23" BorderBrush="{Binding BorderColor}" BorderThickness="0,0,0,3" Padding="14,10" Margin="6" CornerRadius="3">
+                                    <Border Background="@@Surface1@@" BorderBrush="{Binding BorderColor}" BorderThickness="0,0,0,3" Padding="14,10" Margin="6" CornerRadius="3">
                                         <StackPanel>
-                                            <TextBlock Text="{Binding Label}" Foreground="#9ca3af" FontSize="11"/>
+                                            <TextBlock Text="{Binding Label}" Foreground="@@TextSecondary@@" FontSize="11"/>
                                             <TextBlock Text="{Binding Value}" Foreground="{Binding TextColor}" FontSize="14" FontWeight="SemiBold" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                         </StackPanel>
                                     </Border>
@@ -994,7 +982,7 @@ Add-Type -AssemblyName System.Windows.Forms
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
-                        <TextBlock Text="Schnell-Aktionen" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" Margin="0,24,0,10"/>
+                        <TextBlock Text="Schnell-Aktionen" FontSize="14" FontWeight="Bold" Foreground="@@Accent@@" Margin="0,24,0,10"/>
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -1004,10 +992,10 @@ Add-Type -AssemblyName System.Windows.Forms
                             <Button x:Name="btnExitGameMode" Grid.Column="1" Content="🛑 EXIT GAME MODE" Style="{StaticResource DangerButton}" Height="60" FontSize="15" FontWeight="Bold" Margin="6"/>
                         </Grid>
 
-                        <TextBlock Text="Empfehlungen" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" Margin="0,24,0,10"/>
+                        <TextBlock Text="Empfehlungen" FontSize="14" FontWeight="Bold" Foreground="@@Accent@@" Margin="0,24,0,10"/>
                         <StackPanel x:Name="recoList"/>
-                        <Border x:Name="recoEmptyState" Background="#0f3a23" BorderBrush="#4ade80" BorderThickness="0,0,0,2" Padding="14,10" CornerRadius="3" Visibility="Collapsed">
-                            <TextBlock Text="✓ Alle Live-Checks gruen. Setup ist sauber - viel Erfolg im Match." Foreground="#4ade80" FontWeight="SemiBold"/>
+                        <Border x:Name="recoEmptyState" Background="@@OkBg@@" BorderBrush="@@StatusOK@@" BorderThickness="0,0,0,2" Padding="14,10" CornerRadius="3" Visibility="Collapsed">
+                            <TextBlock Text="✓ Alle Live-Checks gruen. Setup ist sauber - viel Erfolg im Match." Foreground="@@StatusOK@@" FontWeight="SemiBold"/>
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
@@ -1021,15 +1009,15 @@ Add-Type -AssemblyName System.Windows.Forms
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="Full System Diagnose (v6)" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" Margin="0,0,0,10"/>
+                    <TextBlock Grid.Row="0" Text="Full System Diagnose (v6)" FontSize="14" FontWeight="Bold" Foreground="@@Accent@@" Margin="0,0,0,10"/>
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,12">
                         <Button x:Name="btnRunDiag" Content="📊 Run Full Diagnose" Width="200" Height="38"/>
                         <Button x:Name="btnOpenHTML" Content="🌐 Open Last Report" Width="200" Height="38" Margin="10,0,0,0"/>
                         <Button x:Name="btnOpenReports" Content="📁 Reports Folder" Width="160" Height="38" Margin="10,0,0,0"/>
                     </StackPanel>
-                    <Border Grid.Row="2" Background="#1a1d23" BorderBrush="#2d3139" BorderThickness="1" CornerRadius="4">
+                    <Border Grid.Row="2" Background="@@Surface1@@" BorderBrush="@@BorderSubtle@@" BorderThickness="1" CornerRadius="4">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
-                            <TextBlock x:Name="txtDiagOutput" Text="" Foreground="#d1d5db" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="txtDiagOutput" Text="" Foreground="@@TextPrimary@@" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
                         </ScrollViewer>
                     </Border>
                 </Grid>
@@ -1044,7 +1032,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Performance Capture (60s)" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock Foreground="#9ca3af" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
                                     <Run Text="Misst Frametimes via Intel PresentMon - passiv via ETW, kein DLL-Hook, kein RTSS."/>
                                     <LineBreak/>
                                     <Run Text="Voraussetzungen: PUBG laeuft, du bist im Match. Game Mode (Monitore solo + RTSS aus) empfohlen davor."/>
@@ -1055,8 +1043,8 @@ Add-Type -AssemblyName System.Windows.Forms
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="PresentMon: " Foreground="#e5e7eb" FontSize="12" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="1" x:Name="lblCapToolStatus" Text="pruefe..." Foreground="#9ca3af" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="0" Text="PresentMon: " Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" x:Name="lblCapToolStatus" Text="pruefe..." Foreground="@@TextSecondary@@" FontSize="12" VerticalAlignment="Center"/>
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
@@ -1064,7 +1052,7 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <Button x:Name="btnCapStop" Content="Stop" Style="{StaticResource DangerButton}" Width="100" Height="44" Margin="8,0,0,0" IsEnabled="False"/>
                                 </StackPanel>
 
-                                <TextBlock x:Name="lblCapPhase" Text="Bereit." Foreground="#60a5fa" FontSize="12" FontWeight="SemiBold" Margin="0,12,0,0"/>
+                                <TextBlock x:Name="lblCapPhase" Text="Bereit." Foreground="@@Accent@@" FontSize="12" FontWeight="SemiBold" Margin="0,12,0,0"/>
                             </StackPanel>
                         </Border>
 
@@ -1072,7 +1060,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Letzte Messung" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock x:Name="lblCapLastInfo" Text="Noch keine Messung gemacht." Foreground="#9ca3af" FontSize="11" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="lblCapLastInfo" Text="Noch keine Messung gemacht." Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,8"/>
 
                                 <Grid x:Name="capResultGrid" Visibility="Collapsed">
                                     <Grid.RowDefinitions>
@@ -1091,159 +1079,159 @@ Add-Type -AssemblyName System.Windows.Forms
                                     </Grid.ColumnDefinitions>
 
                                     <!-- Row 0: FPS-Hauptmetriken -->
-                                    <Border Grid.Row="0" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="0" Grid.Column="0" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="AVG FPS" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapAvg" Text="-" Foreground="#4ade80" FontSize="22" FontWeight="Bold"/>
-                                            <TextBlock Text="Durchschnitt ueber Capture" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="AVG FPS" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapAvg" Text="-" Foreground="@@StatusOK@@" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock Text="Durchschnitt ueber Capture" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="0" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="0" Grid.Column="1" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="1% LOW" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCap1Low" Text="-" Foreground="#fbbf24" FontSize="22" FontWeight="Bold"/>
-                                            <TextBlock Text="schlechteste 1% der Frames" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="1% LOW" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCap1Low" Text="-" Foreground="@@StatusWarn@@" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock Text="schlechteste 1% der Frames" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="0" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="0" Grid.Column="2" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="0.1% LOW" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCap01Low" Text="-" Foreground="#f87171" FontSize="22" FontWeight="Bold"/>
-                                            <TextBlock Text="worst-case Stutter-Floor" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="0.1% LOW" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCap01Low" Text="-" Foreground="@@StatusError@@" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock Text="worst-case Stutter-Floor" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="0" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="0" Grid.Column="3" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="STDDEV (Frame Pacing)" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapStdDev" Text="-" Foreground="#60a5fa" FontSize="22" FontWeight="Bold"/>
-                                            <TextBlock x:Name="lblCapStability" Text="-" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="STDDEV (Frame Pacing)" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapStdDev" Text="-" Foreground="@@Accent@@" FontSize="22" FontWeight="Bold"/>
+                                            <TextBlock x:Name="lblCapStability" Text="-" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
 
                                     <!-- Row 1: Bottleneck-Analyse -->
-                                    <Border Grid.Row="1" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="1" Grid.Column="0" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="BOTTLENECK" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapBottleneck" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="wer limitiert?" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="BOTTLENECK" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapBottleneck" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="wer limitiert?" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="1" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="1" Grid.Column="1" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="CPU BUSY" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapCpuBusy" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="ms CPU pro Frame" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="CPU BUSY" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapCpuBusy" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="ms CPU pro Frame" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="1" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="1" Grid.Column="2" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="GPU BUSY" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapGpuBusy" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="ms GPU pro Frame" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="GPU BUSY" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapGpuBusy" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="ms GPU pro Frame" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="1" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="1" Grid.Column="3" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="RENDER LATENCY" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapRenderLat" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="Render -> Present" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="RENDER LATENCY" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapRenderLat" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="Render -> Present" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
 
                                     <!-- Row 2: Latency-Details -->
-                                    <Border Grid.Row="2" Grid.Column="0" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="2" Grid.Column="0" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="UNTIL DISPLAYED" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapUntilDisp" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="Frame -> Photon" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="UNTIL DISPLAYED" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapUntilDisp" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="Frame -> Photon" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="2" Grid.Column="1" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="2" Grid.Column="1" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="CLICK->PHOTON" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapClickPhoton" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="nur mit Reflex" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="CLICK->PHOTON" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapClickPhoton" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="nur mit Reflex" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="2" Grid.Column="2" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="2" Grid.Column="2" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="G-SYNC" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapGSync" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="AllowsTearing-Flag" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="G-SYNC" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapGSync" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="AllowsTearing-Flag" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Grid.Row="2" Grid.Column="3" Background="#0f1115" CornerRadius="4" Padding="10,8" Margin="4">
+                                    <Border Grid.Row="2" Grid.Column="3" Background="@@BgBase@@" CornerRadius="4" Padding="10,8" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="STUTTER" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapStutter" Text="-" Foreground="#e5e7eb" FontSize="14" FontWeight="Bold"/>
-                                            <TextBlock Text="Frames &gt; 2x Avg" Foreground="#6b7280" FontSize="9"/>
+                                            <TextBlock Text="STUTTER" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapStutter" Text="-" Foreground="@@TextPrimary@@" FontSize="14" FontWeight="Bold"/>
+                                            <TextBlock Text="Frames &gt; 2x Avg" Foreground="@@TextDisabled@@" FontSize="9"/>
                                         </StackPanel>
                                     </Border>
 
                                     <!-- Row 3: Present Mode mit Erklaerung (volle Breite) -->
-                                    <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4" Background="#0f1115" CornerRadius="4" Padding="12,10" Margin="4">
+                                    <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4" Background="@@BgBase@@" CornerRadius="4" Padding="12,10" Margin="4">
                                         <StackPanel>
-                                            <TextBlock Text="PRESENT MODE   (Independent / Legacy Flip = OPTIMAL    -    Composed Copy = BAD, ~3-5ms DWM-Overhead)" Foreground="#9ca3af" FontSize="10"/>
-                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="#e5e7eb" FontSize="15" FontWeight="Bold" TextWrapping="Wrap" Margin="0,3,0,0"/>
-                                            <TextBlock x:Name="lblCapPresentExplain" Text="" Foreground="#6b7280" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                            <TextBlock Text="PRESENT MODE   (Independent / Legacy Flip = OPTIMAL    -    Composed Copy = BAD, ~3-5ms DWM-Overhead)" Foreground="@@TextSecondary@@" FontSize="10"/>
+                                            <TextBlock x:Name="lblCapPresentMode" Text="-" Foreground="@@TextPrimary@@" FontSize="15" FontWeight="Bold" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                            <TextBlock x:Name="lblCapPresentExplain" Text="" Foreground="@@TextDisabled@@" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </Border>
 
                                     <!-- Row 4: Metriken-Erklaerung (Expander) -->
-                                    <Expander Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Header="Was bedeuten diese Metriken?" Foreground="#93c5fd" FontSize="11" Margin="4,4,4,0">
-                                        <Border Background="#0f1115" CornerRadius="4" Padding="12,10" Margin="0,6,0,0">
+                                    <Expander Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Header="Was bedeuten diese Metriken?" Foreground="@@Accent@@" FontSize="11" Margin="4,4,4,0">
+                                        <Border Background="@@BgBase@@" CornerRadius="4" Padding="12,10" Margin="0,6,0,0">
                                             <StackPanel>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#4ade80">AVG FPS</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@StatusOK@@">AVG FPS</Run>
                                                     <Run> - Durchschnittliche Bilder/Sekunde. Hauptkennzahl, aber sagt nichts ueber Konsistenz aus.</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#fbbf24">1% LOW</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@StatusWarn@@">1% LOW</Run>
                                                     <Run> - FPS-Wert den die schlechtesten 1% der Frames erreichen. Wichtiger als AVG fuer Spielgefuehl. Gap zum AVG &gt; 30% = Stutter-Problem.</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#f87171">0.1% LOW</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@StatusError@@">0.1% LOW</Run>
                                                     <Run> - Die schlimmsten 0.1% der Frames - der "Floor" bei dem es richtig haengt. Niedriger Wert = sichtbare Hakler / Shadertompilations / Background-CPU-Spikes.</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#60a5fa">STDDEV (ms)</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@Accent@@">STDDEV (ms)</Run>
                                                     <Run> - Standardabweichung der Frametimes in Millisekunden. Misst Frame-Pacing-Konsistenz: niedriger = gleichmaessig fluessig, hoeher = ruckelt selbst bei hoher AVG. Faustregel bei 200+ FPS: &lt; 0.5ms top, 0.5-1.5ms ok, &gt; 2ms unrund.</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">BOTTLENECK</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@TextPrimary@@">BOTTLENECK</Run>
                                                     <Run> - Wer limitiert die FPS: CPU-Bound (CPU rechnet zu lange pro Frame - mehr GPU-Last unkritisch), GPU-Bound (GPU am Limit - Settings reduzieren bringt FPS), Balanced (beide gleich ausgelastet, idealer Zustand fuer competitive).</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">CPU/GPU BUSY (ms)</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@TextPrimary@@">CPU/GPU BUSY (ms)</Run>
                                                     <Run> - Wie viele Millisekunden CPU bzw. GPU pro Frame aktiv waren. Bei 200 FPS = 5ms Budget. Wer drueber ist = Bottleneck.</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">RENDER LATENCY</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@TextPrimary@@">RENDER LATENCY</Run>
                                                     <Run> - Zeit vom Render-Start bis der Frame "Present"-ed wird. Niedrig = direkte Pipeline. UNTIL DISPLAYED ergaenzt das: Zeit bis Pixel tatsaechlich auf dem Monitor sichtbar sind (Frame-to-Photon).</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">CLICK -&gt; PHOTON</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@TextPrimary@@">CLICK -&gt; PHOTON</Run>
                                                     <Run> - Vollstaendige End-to-End-Latency Maus-Click bis sichtbare Reaktion. Nur verfuegbar bei NVIDIA Reflex (PUBG hat keinen direkten Reflex-Support - daher meist "NA").</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#22c55e">PRESENT MODE</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@StatusBest@@">PRESENT MODE</Run>
                                                     <Run> - Wie Windows den Frame an den Monitor uebergibt. Hierarchie:</Run>
                                                     <LineBreak/>
-                                                    <Run FontWeight="Bold" Foreground="#22c55e">  - Hardware: Independent Flip  /  Hardware: Legacy Flip  =  OPTIMAL</Run>
-                                                    <Run Foreground="#9ca3af"> (kein DWM-Compositor zwischendrin)</Run>
+                                                    <Run FontWeight="Bold" Foreground="@@StatusBest@@">  - Hardware: Independent Flip  /  Hardware: Legacy Flip  =  OPTIMAL</Run>
+                                                    <Run Foreground="@@TextSecondary@@"> (kein DWM-Compositor zwischendrin)</Run>
                                                     <LineBreak/>
-                                                    <Run FontWeight="Bold" Foreground="#4ade80">  - Hardware Composed: Flip  /  Hardware: Legacy Copy  =  OK</Run>
-                                                    <Run Foreground="#9ca3af"> (geringer DWM-Overhead)</Run>
+                                                    <Run FontWeight="Bold" Foreground="@@StatusOK@@">  - Hardware Composed: Flip  /  Hardware: Legacy Copy  =  OK</Run>
+                                                    <Run Foreground="@@TextSecondary@@"> (geringer DWM-Overhead)</Run>
                                                     <LineBreak/>
-                                                    <Run FontWeight="Bold" Foreground="#f87171">  - Composed: Copy with GPU GDI  =  BAD</Run>
-                                                    <Run Foreground="#9ca3af"> (~3-5ms zusaetzliche Latenz - meist durch laufendes RTSS, falsche DPI-Skalierung oder Multi-Monitor-Setup)</Run>
+                                                    <Run FontWeight="Bold" Foreground="@@StatusError@@">  - Composed: Copy with GPU GDI  =  BAD</Run>
+                                                    <Run Foreground="@@TextSecondary@@"> (~3-5ms zusaetzliche Latenz - meist durch laufendes RTSS, falsche DPI-Skalierung oder Multi-Monitor-Setup)</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11" Margin="0,0,0,6">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">G-SYNC</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,6">
+                                                    <Run FontWeight="Bold" Foreground="@@TextPrimary@@">G-SYNC</Run>
                                                     <Run> - "AllowsTearing" Flag in &gt; 50% der Frames. Zeigt ob Variable Refresh Rate (G-Sync/FreeSync) aktiv arbeitet.</Run>
                                                 </TextBlock>
-                                                <TextBlock TextWrapping="Wrap" Foreground="#cbd5e1" FontSize="11">
-                                                    <Run FontWeight="Bold" Foreground="#e5e7eb">STUTTER</Run>
+                                                <TextBlock TextWrapping="Wrap" Foreground="@@TextSecondary@@" FontSize="11">
+                                                    <Run FontWeight="Bold" Foreground="@@TextPrimary@@">STUTTER</Run>
                                                     <Run> - Prozent der Frames die mehr als doppelt so lange dauerten wie der Durchschnitt. &lt; 0.2% = unmerklich, &gt; 0.5% = sichtbar als kurze Hakler.</Run>
                                                 </TextBlock>
                                             </StackPanel>
@@ -1265,7 +1253,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Trend (letzte Messungen)" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock x:Name="lblCapHistInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="lblCapHistInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,8"/>
                                 <StackPanel x:Name="capHistoryList"/>
                             </StackPanel>
                         </Border>
@@ -1284,14 +1272,14 @@ Add-Type -AssemblyName System.Windows.Forms
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Aktionen die 'Start Game Mode' ausfuehrt" FontSize="14" FontWeight="Bold" Foreground="#93c5fd" Margin="0,0,0,10"/>
+                    <TextBlock Grid.Row="0" Text="Aktionen die 'Start Game Mode' ausfuehrt" FontSize="14" FontWeight="Bold" Foreground="@@Accent@@" Margin="0,0,0,10"/>
 
                     <StackPanel Grid.Row="1" Margin="0,0,0,16">
-                        <CheckBox x:Name="cbMonitors" Content="Monitore: nur OLED aktiv (Acer XB271HU deaktivieren)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
-                        <CheckBox x:Name="cbRTSS" Content="RTSS Prozesse beenden (kritisch fuer Mode 3/1)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
-                        <CheckBox x:Name="cbBackground" Content="Hintergrund-Apps schliessen (Chrome, Spotify, Battle.net, Epic, OBS - Discord bleibt fuer Voice)" Foreground="#e5e7eb" Margin="0,4" IsChecked="True"/>
-                        <CheckBox x:Name="cbTimer" Content="Timer Resolution 0.5 ms (SetTimerResolutionService - nicht im PoC)" Foreground="#6b7280" Margin="0,4" IsEnabled="False"/>
-                        <CheckBox x:Name="cbLaunch" Content="PUBG via Steam direkt starten" Foreground="#e5e7eb" Margin="0,4" IsChecked="False"/>
+                        <CheckBox x:Name="cbMonitors" Content="Monitore: nur OLED aktiv (Acer XB271HU deaktivieren)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
+                        <CheckBox x:Name="cbRTSS" Content="RTSS Prozesse beenden (kritisch fuer Mode 3/1)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
+                        <CheckBox x:Name="cbBackground" Content="Hintergrund-Apps schliessen (Chrome, Spotify, Battle.net, Epic, OBS - Discord bleibt fuer Voice)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
+                        <CheckBox x:Name="cbTimer" Content="Timer Resolution 0.5 ms (SetTimerResolutionService - nicht im PoC)" Foreground="@@TextDisabled@@" Margin="0,4" IsEnabled="False"/>
+                        <CheckBox x:Name="cbLaunch" Content="PUBG via Steam direkt starten" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="False"/>
                     </StackPanel>
 
                     <Grid Grid.Row="2" Margin="0,0,0,12">
@@ -1303,9 +1291,9 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Button x:Name="btnGMExit" Grid.Column="1" Content="🛑 EXIT GAME MODE" Style="{StaticResource DangerButton}" Height="44" FontSize="14" FontWeight="Bold" Margin="6,0,0,0"/>
                     </Grid>
 
-                    <Border Grid.Row="3" Background="#1a1d23" BorderBrush="#2d3139" BorderThickness="1" CornerRadius="4">
+                    <Border Grid.Row="3" Background="@@Surface1@@" BorderBrush="@@BorderSubtle@@" BorderThickness="1" CornerRadius="4">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
-                            <TextBlock x:Name="txtGMLog" Text="Log:&#x0a;" Foreground="#d1d5db" FontFamily="Consolas" FontSize="12"/>
+                            <TextBlock x:Name="txtGMLog" Text="Log:&#x0a;" Foreground="@@TextPrimary@@" FontFamily="Consolas" FontSize="12"/>
                         </ScrollViewer>
                     </Border>
                 </Grid>
@@ -1328,13 +1316,13 @@ Add-Type -AssemblyName System.Windows.Forms
                             <Button x:Name="btnSelectNone" Content="Clear" Width="80" Height="32"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Filter:" Foreground="#9ca3af" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBlock Text="Filter:" Foreground="@@TextSecondary@@" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <Button x:Name="btnFilterAll" Content="Alle" Width="80" Height="26" Margin="0,0,4,0"/>
                             <Button x:Name="btnFilterOpen" Content="Offen" Width="80" Height="26" Margin="0,0,4,0"/>
                             <Button x:Name="btnFilterDone" Content="Angewendet" Width="120" Height="26"/>
                         </StackPanel>
                     </StackPanel>
-                    <TextBlock Grid.Row="1" x:Name="lblTweakInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                    <TextBlock Grid.Row="1" x:Name="lblTweakInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                         <StackPanel x:Name="tweakContainer"/>
                     </ScrollViewer>
@@ -1352,15 +1340,15 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <TextBlock Text="PUBG Esport-Grafik (Competitive-Profil)" Style="{StaticResource SectionHeader}"/>
                                     <Button x:Name="btnGfxRefresh" Content="Status pruefen" HorizontalAlignment="Right" Width="140" Margin="0,-4,0,0"/>
                                 </Grid>
-                                <TextBlock Foreground="#9ca3af" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10">
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10">
                                     <Run Text="Schreibt PUBGs In-Game-Grafikmenue direkt in GameUserSettings.ini: Exklusiv-Vollbild, Sicht-Blocker niedrig, Spotting-Klarheit hoch. Alle Werte sind menue-konform (BattlEye-safe). Die Aufloesung wird NICHT veraendert."/>
                                     <LineBreak/>
                                     <Run Text="Bewusst getrennt von 'Apply All' - diese Einstellung ist zu wichtig fuer eine pauschale Anwendung."/>
                                 </TextBlock>
 
-                                <Border Background="#0f1115" CornerRadius="3" Padding="10,8" Margin="0,0,0,4">
+                                <Border Background="@@BgBase@@" CornerRadius="3" Padding="10,8" Margin="0,0,0,4">
                                     <StackPanel>
-                                        <TextBlock Text="Status" Foreground="#9ca3af" FontSize="10" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Status" Foreground="@@TextSecondary@@" FontSize="10" FontWeight="SemiBold"/>
                                         <TextBlock x:Name="lblGfxStatus" Text="..." FontSize="13" FontWeight="Bold" Margin="0,2,0,0"/>
                                     </StackPanel>
                                 </Border>
@@ -1371,7 +1359,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Profil-Werte" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock x:Name="lblGfxValues" Foreground="#d1d5db" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" LineHeight="18"/>
+                                <TextBlock x:Name="lblGfxValues" Foreground="@@TextPrimary@@" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" LineHeight="18"/>
                             </StackPanel>
                         </Border>
 
@@ -1379,15 +1367,15 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Anwenden / Zuruecksetzen" Style="{StaticResource SectionHeader}"/>
-                                <Border Background="#3a2a0f" BorderBrush="#fbbf24" BorderThickness="0,0,0,2" CornerRadius="3" Padding="10,8" Margin="0,0,0,12">
-                                    <TextBlock Foreground="#fcd34d" FontSize="11" TextWrapping="Wrap"
+                                <Border Background="@@WarnBg@@" BorderBrush="@@StatusWarn@@" BorderThickness="0,0,0,2" CornerRadius="3" Padding="10,8" Margin="0,0,0,12">
+                                    <TextBlock Foreground="@@StatusWarn@@" FontSize="11" TextWrapping="Wrap"
                                                Text="WICHTIG: PUBG muss beim Anwenden komplett geschlossen sein - sonst ueberschreibt es die Datei beim Beenden. Vor jeder Aenderung wird ein Backup erstellt."/>
                                 </Border>
                                 <StackPanel Orientation="Horizontal">
                                     <Button x:Name="btnGfxApply" Content="Competitive-Profil anwenden" Style="{StaticResource SuccessButton}" Width="240" Height="36" Margin="0,0,8,0"/>
                                     <Button x:Name="btnGfxRevert" Content="Zuruecksetzen (Backup)" Style="{StaticResource DangerButton}" Width="200" Height="36"/>
                                 </StackPanel>
-                                <TextBlock x:Name="lblGfxInfo" Text="" Foreground="#9ca3af" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="lblGfxInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -1402,7 +1390,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Erkanntes System" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock x:Name="lblDetectedHw" Foreground="#d1d5db" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" LineHeight="18"/>
+                                <TextBlock x:Name="lblDetectedHw" Foreground="@@TextPrimary@@" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" LineHeight="18"/>
                             </StackPanel>
                         </Border>
 
@@ -1413,11 +1401,11 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <TextBlock Text="Monitor-Setup" Style="{StaticResource SectionHeader}"/>
                                     <Button x:Name="btnDetectMonitors" Content="Erneut scannen" HorizontalAlignment="Right" Width="140" Margin="0,-4,0,0"/>
                                 </Grid>
-                                <TextBlock Text="Erkannte Displays:" Foreground="#9ca3af" FontSize="11" Margin="0,4,0,4"/>
+                                <TextBlock Text="Erkannte Displays:" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,4,0,4"/>
                                 <StackPanel x:Name="monitorList"/>
 
-                                <TextBlock Text="Monitor-Pattern (Game-Mode)" Foreground="#e5e7eb" FontWeight="SemiBold" FontSize="12" Margin="0,18,0,4"/>
-                                <TextBlock Foreground="#9ca3af" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
+                                <TextBlock Text="Monitor-Pattern (Game-Mode)" Foreground="@@TextPrimary@@" FontWeight="SemiBold" FontSize="12" Margin="0,18,0,4"/>
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
                                     <Run Text="Regex - matcht Monitor-Namen die im Game Mode deaktiviert werden."/>
                                     <LineBreak/>
                                     <Run Text="Tipp: 'Detect &amp; Fill' generiert den Pattern automatisch aus deinen Sekundaer-Monitoren."/>
@@ -1427,7 +1415,7 @@ Add-Type -AssemblyName System.Windows.Forms
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="140"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="tbMonitorPattern" Grid.Column="0" Background="#0f1115" Foreground="#e5e7eb" BorderBrush="#2d3139" Padding="8,6" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                                    <TextBox x:Name="tbMonitorPattern" Grid.Column="0" Background="@@BgBase@@" Foreground="@@TextPrimary@@" BorderBrush="@@BorderSubtle@@" Padding="8,6" FontFamily="Consolas" VerticalContentAlignment="Center"/>
                                     <Button x:Name="btnAutoPattern" Grid.Column="1" Content="Detect &amp; Fill" Margin="8,0,0,0"/>
                                 </Grid>
                             </StackPanel>
@@ -1437,7 +1425,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Pfade (Tools &amp; State)" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock x:Name="lblPaths" Foreground="#d1d5db" FontFamily="Consolas" FontSize="10" TextWrapping="Wrap" LineHeight="16"/>
+                                <TextBlock x:Name="lblPaths" Foreground="@@TextPrimary@@" FontFamily="Consolas" FontSize="10" TextWrapping="Wrap" LineHeight="16"/>
                             </StackPanel>
                         </Border>
 
@@ -1445,7 +1433,7 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="Storage / Logs / Backups" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock Foreground="#9ca3af" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8">
                                     <Run Text="Alle Apply/Revert-Aktionen werden geloggt. Snapshots erlauben Revert via Tweak-Button."/>
                                 </TextBlock>
                                 <StackPanel Orientation="Horizontal">
@@ -1453,7 +1441,7 @@ Add-Type -AssemblyName System.Windows.Forms
                                     <Button x:Name="btnOpenBackups" Content="Backups oeffnen" Width="160" Margin="0,0,8,0"/>
                                     <Button x:Name="btnClearHistory" Content="History loeschen" Width="160" Style="{StaticResource DangerButton}"/>
                                 </StackPanel>
-                                <TextBlock x:Name="lblHistoryStat" Foreground="#9ca3af" FontSize="11" Margin="0,8,0,0"/>
+                                <TextBlock x:Name="lblHistoryStat" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,8,0,0"/>
                             </StackPanel>
                         </Border>
 
@@ -1461,28 +1449,28 @@ Add-Type -AssemblyName System.Windows.Forms
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="About" Style="{StaticResource SectionHeader}"/>
-                                <TextBlock Foreground="#d1d5db" TextWrapping="Wrap" LineHeight="20">
+                                <TextBlock Foreground="@@TextPrimary@@" TextWrapping="Wrap" LineHeight="20">
                                     <Run Text="PUBG Performance Suite" FontWeight="SemiBold"/>
                                     <Run x:Name="lblAboutVersion" Text=""/>
                                     <LineBreak/><LineBreak/>
-                                    <Run Text="Open Source PowerShell-WPF Tool fuer PUBG-Competitive-Tuning. BattlEye-safe, vollstaendig reversibel, keine externen Dependencies ausser auto-installierten Open-Source-Helpern (PresentMon, MultiMonitorTool, NPI)." Foreground="#9ca3af"/>
+                                    <Run Text="Open Source PowerShell-WPF Tool fuer PUBG-Competitive-Tuning. BattlEye-safe, vollstaendig reversibel, keine externen Dependencies ausser auto-installierten Open-Source-Helpern (PresentMon, MultiMonitorTool, NPI)." Foreground="@@TextSecondary@@"/>
                                     <LineBreak/><LineBreak/>
-                                    <Run Text="Repo:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="Repo:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  github.com/Sotrax/pubg-performance-suite"/>
                                     <LineBreak/>
-                                    <Run Text="Update:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="Update:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text='  irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex'/>
                                     <LineBreak/><LineBreak/>
-                                    <Run Text="Auto-Detection:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="Auto-Detection:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  Monitor-Hz, PUBG-Steam-Pfad, dedizierte GPU, Energieplan, NPI-Apply-Stamp"/>
                                     <LineBreak/>
-                                    <Run Text="Backups:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="Backups:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  Tweaks legen .bak_&lt;timestamp&gt; neben das Original an, Registry-Snapshots in history.json"/>
                                     <LineBreak/>
-                                    <Run Text="Reversibel:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="Reversibel:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  15 von 16 Tweaks per Klick rueckgaengig (NV-Profil nutzt NPI-eigene Reset-Funktion)"/>
                                     <LineBreak/>
-                                    <Run Text="BattlEye-safe:" FontWeight="SemiBold" Foreground="#93c5fd"/>
+                                    <Run Text="BattlEye-safe:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  Kein Special K, kein ReShade, kein DXVK, keine ban-bait Engine.ini CVars, kein Process-Lasso auf BEService"/>
                                 </TextBlock>
                             </StackPanel>
@@ -1493,12 +1481,24 @@ Add-Type -AssemblyName System.Windows.Forms
         </TabControl>
 
         <!-- Footer -->
-        <Border Grid.Row="2" Background="#1a1d23" BorderBrush="#2d3139" BorderThickness="0,1,0,0" Padding="20,8">
-            <TextBlock x:Name="lblFooter" Text="Bereit." Foreground="#6b7280" FontSize="11"/>
+        <Border Grid.Row="2" Background="@@Surface1@@" BorderBrush="@@BorderSubtle@@" BorderThickness="0,1,0,0" Padding="20,8">
+            <TextBlock x:Name="lblFooter" Text="Bereit." Foreground="@@TextDisabled@@" FontSize="11"/>
         </Border>
     </Grid>
 </Window>
 '@
+
+# Farb-Token aufloesen: @@Name@@ -> Hex-Wert aus $Global:SuiteColors.
+# Damit ist die Palette die einzige Quelle - XAML und Code teilen sie.
+$xamlText = $xamlTemplate
+foreach ($k in $Global:SuiteColors.Keys) {
+    $xamlText = $xamlText.Replace("@@$k@@", $Global:SuiteColors[$k])
+}
+$leftoverToken = [regex]::Match($xamlText, '@@\w+@@')
+if ($leftoverToken.Success) {
+    throw "XAML-Build: unaufgeloestes Farb-Token '$($leftoverToken.Value)' - fehlt in `$Global:SuiteColors"
+}
+[xml]$xaml = $xamlText
 
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
@@ -1525,11 +1525,11 @@ foreach ($name in @('mainTabs','lblVersion','lblAdmin','adminBadge','lblTopStatu
 
 # ==================== UI HELPERS ====================
 $colorByStatus = @{
-    'OK'   = @{ Border='#4ade80'; Text='#4ade80' }
-    'WARN' = @{ Border='#fbbf24'; Text='#fbbf24' }
-    'BAD'  = @{ Border='#f87171'; Text='#f87171' }
-    'INFO' = @{ Border='#60a5fa'; Text='#e5e7eb' }
-    'SKIP' = @{ Border='#9ca3af'; Text='#9ca3af' }
+    'OK'   = @{ Border=$Global:SuiteColors.StatusOK; Text=$Global:SuiteColors.StatusOK }
+    'WARN' = @{ Border=$Global:SuiteColors.StatusWarn; Text=$Global:SuiteColors.StatusWarn }
+    'BAD'  = @{ Border=$Global:SuiteColors.StatusError; Text=$Global:SuiteColors.StatusError }
+    'INFO' = @{ Border=$Global:SuiteColors.Accent; Text=$Global:SuiteColors.TextPrimary }
+    'SKIP' = @{ Border=$Global:SuiteColors.TextSecondary; Text=$Global:SuiteColors.TextSecondary }
 }
 
 function Update-StatusGrid {
@@ -1567,8 +1567,8 @@ function Update-StatusGrid {
         $ctrls.recoEmptyState.Visibility = 'Collapsed'
         foreach ($r in $recos) {
             $border = New-Object System.Windows.Controls.Border
-            $border.Background = '#1a1d23'
-            $border.BorderBrush = if ($r.Sev -eq 'BAD') { '#f87171' } else { '#fbbf24' }
+            $border.Background = $Global:SuiteColors.Surface1
+            $border.BorderBrush = if ($r.Sev -eq 'BAD') { $Global:SuiteColors.StatusError } else { $Global:SuiteColors.StatusWarn }
             $border.BorderThickness = New-Object System.Windows.Thickness 0,0,0,2
             $border.CornerRadius = New-Object System.Windows.CornerRadius 3
             $border.Padding = New-Object System.Windows.Thickness 12,8,12,8
@@ -1584,7 +1584,7 @@ function Update-StatusGrid {
             $grid.Children.Add($sp) | Out-Null
 
             $sevIcon = if ($r.Sev -eq 'BAD') { '⚠' } else { '!' }
-            $sevColor = if ($r.Sev -eq 'BAD') { '#f87171' } else { '#fbbf24' }
+            $sevColor = if ($r.Sev -eq 'BAD') { $Global:SuiteColors.StatusError } else { $Global:SuiteColors.StatusWarn }
 
             $titleSp = New-Object System.Windows.Controls.StackPanel
             $titleSp.Orientation = 'Horizontal'
@@ -1593,12 +1593,12 @@ function Update-StatusGrid {
             $tbIcon.Margin = New-Object System.Windows.Thickness 0,0,6,0
             $titleSp.Children.Add($tbIcon) | Out-Null
             $tbTitle = New-Object System.Windows.Controls.TextBlock
-            $tbTitle.Text = $r.Title; $tbTitle.Foreground = '#e5e7eb'; $tbTitle.FontWeight = 'SemiBold'; $tbTitle.FontSize = 12
+            $tbTitle.Text = $r.Title; $tbTitle.Foreground = $Global:SuiteColors.TextPrimary; $tbTitle.FontWeight = 'SemiBold'; $tbTitle.FontSize = 12
             $titleSp.Children.Add($tbTitle) | Out-Null
             $sp.Children.Add($titleSp) | Out-Null
 
             $tbDetail = New-Object System.Windows.Controls.TextBlock
-            $tbDetail.Text = $r.Detail; $tbDetail.Foreground = '#9ca3af'; $tbDetail.FontSize = 11
+            $tbDetail.Text = $r.Detail; $tbDetail.Foreground = $Global:SuiteColors.TextSecondary; $tbDetail.FontSize = 11
             $tbDetail.TextWrapping = 'Wrap'; $tbDetail.Margin = New-Object System.Windows.Thickness 18,2,0,0
             $sp.Children.Add($tbDetail) | Out-Null
 
@@ -1644,7 +1644,7 @@ function Update-StatusGrid {
                 $lastApply = "Letzter Apply: $($lastApplyEntry.TweakId) ($($dt.ToString('HH:mm')))"
             } catch { $lastApply = "Letzter Apply: $($lastApplyEntry.TweakId)" }
         }
-    } catch {}
+    } catch {}  # Footer-Info ist rein kosmetisch - History-Lesefehler hier ignorieren
     $footerParts = @("Status: $(Get-Date -Format 'HH:mm:ss')")
     if ($lastApply) { $footerParts += $lastApply }
     $ctrls.lblFooter.Text = ($footerParts -join '   |   ')
@@ -1653,10 +1653,10 @@ function Update-StatusGrid {
 function Write-GMLog {
     param([string]$Msg, [string]$Level = 'INFO')
     $color = switch ($Level) {
-        'OK'   { '#4ade80' }
-        'WARN' { '#fbbf24' }
-        'BAD'  { '#f87171' }
-        default { '#d1d5db' }
+        'OK'   { $Global:SuiteColors.StatusOK }
+        'WARN' { $Global:SuiteColors.StatusWarn }
+        'BAD'  { $Global:SuiteColors.StatusError }
+        default { $Global:SuiteColors.TextPrimary }
     }
     $ts = Get-Date -Format 'HH:mm:ss'
     $line = "[$ts] $Msg`n"
@@ -1756,7 +1756,7 @@ function Update-DetectedHardware {
             try {
                 $out = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
                 if ($out) { $vramTxt = "  ($([math]::Round([int]$out.Trim() / 1024, 1)) GB VRAM)" }
-            } catch {}
+            } catch {}  # nvidia-smi optional -> AdapterRAM-Fallback unten greift
         }
     }
     if (-not $vramTxt -and $dGpu -and $dGpu.AdapterRAM) {
@@ -1801,7 +1801,7 @@ function Update-MonitorList {
     if ($monitors.Count -eq 0) {
         $tb = New-Object System.Windows.Controls.TextBlock
         $tb.Text = '(keine Monitore erkannt - MMT nicht installiert?)'
-        $tb.Foreground = '#9ca3af'; $tb.FontSize = 11
+        $tb.Foreground = $Global:SuiteColors.TextSecondary; $tb.FontSize = 11
         $ctrls.monitorList.Children.Add($tb) | Out-Null
         return
     }
@@ -1811,11 +1811,11 @@ function Update-MonitorList {
         $isPrimary = ($m.Primary -eq 'Yes')
 
         $b = New-Object System.Windows.Controls.Border
-        $b.Background = '#0f1115'
+        $b.Background = $Global:SuiteColors.BgBase
         $b.Padding = (New-Object System.Windows.Thickness 10,6,10,6)
         $b.Margin = (New-Object System.Windows.Thickness 0,3,0,0)
         $b.CornerRadius = (New-Object System.Windows.CornerRadius 4)
-        $b.BorderBrush = if ($isPrimary) { '#60a5fa' } elseif ($isActive) { '#4ade80' } else { '#374151' }
+        $b.BorderBrush = if ($isPrimary) { $Global:SuiteColors.Accent } elseif ($isActive) { $Global:SuiteColors.StatusOK } else { $Global:SuiteColors.BorderStrong }
         $b.BorderThickness = (New-Object System.Windows.Thickness 0,0,0,2)
 
         $grid = New-Object System.Windows.Controls.Grid
@@ -1827,7 +1827,7 @@ function Update-MonitorList {
         }
 
         $stTxt = New-Object System.Windows.Controls.TextBlock
-        $col = if ($isActive) { '#4ade80' } else { '#9ca3af' }
+        $col = if ($isActive) { $Global:SuiteColors.StatusOK } else { $Global:SuiteColors.TextSecondary }
         $stTxt.Text = if ($isActive) { 'AKTIV' } else { 'inaktiv' }
         $stTxt.Foreground = $col; $stTxt.FontWeight = 'Bold'; $stTxt.FontSize = 10
         $stTxt.VerticalAlignment = 'Center'
@@ -1836,7 +1836,7 @@ function Update-MonitorList {
 
         $idTxt = New-Object System.Windows.Controls.TextBlock
         $id = $m.'Short Monitor ID'; if (-not $id) { $id = '-' }
-        $idTxt.Text = $id; $idTxt.Foreground = '#9ca3af'; $idTxt.FontSize = 10
+        $idTxt.Text = $id; $idTxt.Foreground = $Global:SuiteColors.TextSecondary; $idTxt.FontSize = 10
         $idTxt.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
         $idTxt.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($idTxt, 1)
@@ -1850,18 +1850,18 @@ function Update-MonitorList {
             if (-not $manu) { $manu = '(EDID liefert kein Friendly-Name - vermutlich OLED ueber DP)' }
             $nm = $manu
         }
-        $nmTxt.Text = $nm; $nmTxt.Foreground = '#e5e7eb'; $nmTxt.FontSize = 11
+        $nmTxt.Text = $nm; $nmTxt.Foreground = $Global:SuiteColors.TextPrimary; $nmTxt.FontSize = 11
         $nmTxt.VerticalAlignment = 'Center'
         [System.Windows.Controls.Grid]::SetColumn($nmTxt, 2)
         $grid.Children.Add($nmTxt) | Out-Null
 
         if ($isPrimary) {
             $pBadge = New-Object System.Windows.Controls.Border
-            $pBadge.Background = '#1e3a8a'; $pBadge.CornerRadius = (New-Object System.Windows.CornerRadius 3)
+            $pBadge.Background = $Global:SuiteColors.InfoBg; $pBadge.CornerRadius = (New-Object System.Windows.CornerRadius 3)
             $pBadge.Padding = (New-Object System.Windows.Thickness 6,2,6,2)
             $pBadge.VerticalAlignment = 'Center'; $pBadge.HorizontalAlignment = 'Right'
             $pTxt = New-Object System.Windows.Controls.TextBlock
-            $pTxt.Text = 'PRIMARY'; $pTxt.Foreground = '#bfdbfe'; $pTxt.FontSize = 9; $pTxt.FontWeight = 'Bold'
+            $pTxt.Text = 'PRIMARY'; $pTxt.Foreground = $Global:SuiteColors.Accent; $pTxt.FontSize = 9; $pTxt.FontWeight = 'Bold'
             $pBadge.Child = $pTxt
             [System.Windows.Controls.Grid]::SetColumn($pBadge, 3)
             $grid.Children.Add($pBadge) | Out-Null
@@ -1944,111 +1944,6 @@ $ctrls.btnAutoPattern.Add_Click({
 })
 Update-DetectedHardware
 Update-MonitorList
-
-# ==================== NPI (NVIDIA Profile Inspector) ====================
-$Global:NPIDefaultDir = 'C:\Tools\nvidiaProfileInspector'
-
-function Get-NPIPath {
-    $candidates = @(
-        "$Global:NPIDefaultDir\nvidiaProfileInspector.exe",
-        "$env:USERPROFILE\Tools\nvidiaProfileInspector\nvidiaProfileInspector.exe",
-        "$env:USERPROFILE\Downloads\nvidiaProfileInspector\nvidiaProfileInspector.exe",
-        "$env:USERPROFILE\Downloads\nvidiaProfileInspector.exe"
-    )
-    foreach ($p in $candidates) {
-        if (Test-Path $p) { return $p }
-    }
-    try {
-        $found = (& where.exe nvidiaProfileInspector.exe 2>$null) | Select-Object -First 1
-        if ($found -and (Test-Path $found)) { return $found }
-    } catch {}
-    return $null
-}
-
-function Install-NPIFromGitHub {
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Write-SuiteLog "NPI-Install: hole Release-Info von GitHub..."
-        $apiUrl = 'https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/latest'
-        $headers = @{ 'User-Agent' = 'PUBG-Suite' }
-        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
-        $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
-        if (-not $zipAsset) { throw 'Kein ZIP-Asset im NPI-Release gefunden' }
-
-        $target = $Global:NPIDefaultDir
-        try {
-            if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force -ErrorAction Stop | Out-Null }
-        } catch {
-            $target = Join-Path $env:USERPROFILE 'Tools\nvidiaProfileInspector'
-            Write-SuiteLog "NPI-Install fallback target: $target" 'WARN'
-            if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
-        }
-        $zipPath = Join-Path $env:TEMP "npi_$($release.tag_name)_$(Get-Random).zip"
-        try {
-            Invoke-WebRequest -Uri $zipAsset.browser_download_url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
-            Expand-Archive -Path $zipPath -DestinationPath $target -Force -ErrorAction Stop
-        } finally {
-            if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
-        }
-        $npiExe = Join-Path $target 'nvidiaProfileInspector.exe'
-        if (-not (Test-Path $npiExe)) {
-            $found = Get-ChildItem -Path $target -Recurse -Filter 'nvidiaProfileInspector.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $npiExe = $found.FullName }
-        }
-        if (Test-Path $npiExe) {
-            Write-SuiteLog "NPI installiert: $npiExe ($($release.tag_name))" 'INFO'
-            return $npiExe
-        }
-        Write-SuiteLog "NPI-Install: Executable nicht im Archiv" 'ERROR'
-        return $null
-    } catch {
-        Write-SuiteLog "NPI-Install Fehler: $($_.Exception.Message)" 'ERROR'
-        return $null
-    }
-}
-
-function Invoke-NPIPubgProfile {
-    param([string]$NpiPath)
-    if (-not $NpiPath -or -not (Test-Path $NpiPath)) {
-        Write-SuiteLog "Invoke-NPIPubgProfile: NPI-Pfad ungueltig: $NpiPath" 'ERROR'
-        return $false
-    }
-    $profileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
-    $settings = @(
-        @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
-        @{ Id='0x00A879CF'; Val='0x00000000'; Desc='Vertical Sync = Force OFF' }
-        @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
-        @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
-        @{ Id='0x10835000'; Val='0x00000002'; Desc='Low Latency Mode = Ultra' }
-        @{ Id='0x10835013'; Val='0x000000ED'; Desc='Frame Rate Limiter v3 = 237 FPS' }
-        @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
-        @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
-    )
-    $ok = 0; $fail = 0
-    foreach ($s in $settings) {
-        try {
-            $null = & $NpiPath '-setProfileSetting' $profileName $s.Id $s.Val 2>&1
-            if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) {
-                $ok++
-                Write-SuiteLog "NPI OK: $($s.Desc)"
-            } else {
-                $fail++
-                Write-SuiteLog "NPI FAIL: $($s.Desc) (Exit $LASTEXITCODE)" 'WARN'
-            }
-        } catch {
-            $fail++
-            Write-SuiteLog "NPI ERR: $($s.Desc) - $($_.Exception.Message)" 'ERROR'
-        }
-    }
-    # Stamp setzen
-    try {
-        $sd = Split-Path $Global:Suite.NPIStamp -Parent
-        if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
-        Get-Date | Out-File $Global:Suite.NPIStamp -Force
-    } catch {}
-    Write-SuiteLog "NPI Apply: $ok ok, $fail fail" 'INFO'
-    return ($ok -gt 0 -and $fail -eq 0)
-}
 
 # ==================== PRESENTMON CAPTURE ====================
 function Get-PresentMonPath {
@@ -2465,12 +2360,12 @@ function Build-TweakRow {
     param($Tweak)
 
     $status = & $Tweak.StatusFn
-    $statusColors = @{ 'OK' = '#4ade80'; 'WARN' = '#fbbf24'; 'BAD' = '#f87171'; 'SKIP' = '#9ca3af' }
-    $color = $statusColors[$status]; if (-not $color) { $color = '#9ca3af' }
+    $statusColors = @{ 'OK' = $Global:SuiteColors.StatusOK; 'WARN' = $Global:SuiteColors.StatusWarn; 'BAD' = $Global:SuiteColors.StatusError; 'SKIP' = $Global:SuiteColors.TextSecondary }
+    $color = $statusColors[$status]; if (-not $color) { $color = $Global:SuiteColors.TextSecondary }
 
     # Outer Border
     $row = New-Object System.Windows.Controls.Border
-    $row.Background = '#1a1d23'
+    $row.Background = $Global:SuiteColors.Surface1
     $row.BorderBrush = $color
     $row.BorderThickness = (New-Object System.Windows.Thickness 0,0,0,2)
     $row.Padding = (New-Object System.Windows.Thickness 12,8,12,8)
@@ -2492,7 +2387,7 @@ function Build-TweakRow {
     [System.Windows.Controls.DockPanel]::SetDock($actions, 'Right')
 
     $stBorder = New-Object System.Windows.Controls.Border
-    $stBorder.Background = '#0f1115'; $stBorder.CornerRadius = (New-Object System.Windows.CornerRadius 3)
+    $stBorder.Background = $Global:SuiteColors.BgBase; $stBorder.CornerRadius = (New-Object System.Windows.CornerRadius 3)
     $stBorder.Padding = (New-Object System.Windows.Thickness 8,3,8,3)
     $stBorder.VerticalAlignment = 'Center'; $stBorder.Margin = (New-Object System.Windows.Thickness 0,0,8,0)
     $stTxt = New-Object System.Windows.Controls.TextBlock
@@ -2508,7 +2403,7 @@ function Build-TweakRow {
 
     if ($status -eq 'OK' -and $revertable) {
         $btn.Content = 'Revert'
-        $btn.Background = '#ea580c'  # orange
+        $btn.Background = $Global:SuiteColors.StatusWarn  # orange
         $btn.IsEnabled = $true
         $btn.Tag = "REVERT:$($Tweak.Id)"
     } elseif ($status -eq 'OK') {
@@ -2565,17 +2460,17 @@ function Build-TweakRow {
     $leftSp.Children.Add($cb) | Out-Null
 
     $catBg = New-Object System.Windows.Controls.Border
-    $catBg.Background = '#374151'; $catBg.CornerRadius = (New-Object System.Windows.CornerRadius 3)
+    $catBg.Background = $Global:SuiteColors.BorderStrong; $catBg.CornerRadius = (New-Object System.Windows.CornerRadius 3)
     $catBg.Padding = (New-Object System.Windows.Thickness 6,2,6,2)
     $catBg.VerticalAlignment = 'Center'; $catBg.Margin = (New-Object System.Windows.Thickness 0,0,10,0)
     $catTxt = New-Object System.Windows.Controls.TextBlock
-    $catTxt.Text = $Tweak.Cat.ToUpper(); $catTxt.Foreground = '#e5e7eb'
+    $catTxt.Text = $Tweak.Cat.ToUpper(); $catTxt.Foreground = $Global:SuiteColors.TextPrimary
     $catTxt.FontSize = 9; $catTxt.FontWeight = 'SemiBold'
     $catBg.Child = $catTxt
     $leftSp.Children.Add($catBg) | Out-Null
 
     $nameTxt = New-Object System.Windows.Controls.TextBlock
-    $nameTxt.Text = $Tweak.Name; $nameTxt.Foreground = '#e5e7eb'; $nameTxt.FontSize = 12; $nameTxt.FontWeight = 'SemiBold'
+    $nameTxt.Text = $Tweak.Name; $nameTxt.Foreground = $Global:SuiteColors.TextPrimary; $nameTxt.FontSize = 12; $nameTxt.FontWeight = 'SemiBold'
     $nameTxt.VerticalAlignment = 'Center'
     $leftSp.Children.Add($nameTxt) | Out-Null
 
@@ -2586,7 +2481,7 @@ function Build-TweakRow {
     $impTxt = "Alltag: $($Tweak.Impact)"
     if ($Tweak.ImpactDetail) { $impTxt += " - $($Tweak.ImpactDetail)" }
     $detailLine.Text = "$($Tweak.Desc)  |  $impTxt"
-    $detailLine.Foreground = '#9ca3af'; $detailLine.FontSize = 10
+    $detailLine.Foreground = $Global:SuiteColors.TextSecondary; $detailLine.FontSize = 10
     $detailLine.TextWrapping = 'Wrap'
     $detailLine.Margin = (New-Object System.Windows.Thickness 30,4,0,0)
     $vsp.Children.Add($detailLine) | Out-Null
@@ -2595,7 +2490,7 @@ function Build-TweakRow {
     if ($Tweak.Changes -and $Tweak.Changes.Count -gt 0) {
         $exp = New-Object System.Windows.Controls.Expander
         $exp.Header = 'Was wird veraendert? (Details anzeigen)'
-        $exp.Foreground = '#60a5fa'; $exp.FontSize = 10
+        $exp.Foreground = $Global:SuiteColors.Accent; $exp.FontSize = 10
         $exp.Margin = (New-Object System.Windows.Thickness 30,4,0,0)
 
         $chSp = New-Object System.Windows.Controls.StackPanel
@@ -2603,7 +2498,7 @@ function Build-TweakRow {
         foreach ($ch in $Tweak.Changes) {
             $chTxt = New-Object System.Windows.Controls.TextBlock
             $chTxt.Text = "* $ch"
-            $chTxt.Foreground = '#d1d5db'; $chTxt.FontSize = 10
+            $chTxt.Foreground = $Global:SuiteColors.TextPrimary; $chTxt.FontSize = 10
             $chTxt.FontFamily = (New-Object System.Windows.Media.FontFamily 'Consolas')
             $chTxt.TextWrapping = 'Wrap'
             $chTxt.Margin = (New-Object System.Windows.Thickness 0,1,0,1)
@@ -2625,9 +2520,9 @@ function Update-FilterButtonStyles {
     }
     foreach ($key in $btns.Keys) {
         if ($key -eq $Global:TweakFilter) {
-            $btns[$key].Background = '#2563eb'
+            $btns[$key].Background = $Global:SuiteColors.Accent
         } else {
-            $btns[$key].Background = '#374151'
+            $btns[$key].Background = $Global:SuiteColors.BorderStrong
         }
     }
 }
@@ -2663,7 +2558,7 @@ function Update-TweaksTab {
             'done' { 'Noch keine Tweaks angewendet.' }
             default { 'Keine Tweaks definiert.' }
         }
-        $empty.Foreground = if ($Global:TweakFilter -eq 'open') { '#4ade80' } else { '#9ca3af' }
+        $empty.Foreground = if ($Global:TweakFilter -eq 'open') { $Global:SuiteColors.StatusOK } else { $Global:SuiteColors.TextSecondary }
         $empty.FontSize = 14; $empty.FontWeight = 'SemiBold'
         $empty.Margin = (New-Object System.Windows.Thickness 0,40,0,0)
         $empty.HorizontalAlignment = 'Center'
@@ -2675,7 +2570,7 @@ function Update-TweaksTab {
 
             $header = New-Object System.Windows.Controls.TextBlock
             $header.Text = "$catName ($($catTweaks.Count))"
-            $header.Foreground = '#93c5fd'; $header.FontSize = 13; $header.FontWeight = 'Bold'
+            $header.Foreground = $Global:SuiteColors.Accent; $header.FontSize = 13; $header.FontWeight = 'Bold'
             $header.Margin = (New-Object System.Windows.Thickness 0,12,0,6)
             $ctrls.tweakContainer.Children.Add($header) | Out-Null
 
@@ -2807,10 +2702,10 @@ function Update-GraphicsTab {
     $status = 'SKIP'
     try { $status = & $tw.StatusFn } catch { $status = 'SKIP' }
     $statusInfo = @{
-        'OK'   = @{ Color='#4ade80'; Text='Profil aktiv - alle Kern-Werte gesetzt' }
-        'WARN' = @{ Color='#fbbf24'; Text='Profil nicht (vollstaendig) aktiv - Werte weichen ab' }
-        'BAD'  = @{ Color='#f87171'; Text='Profil nicht aktiv' }
-        'SKIP' = @{ Color='#9ca3af'; Text='GameUserSettings.ini nicht gefunden - PUBG mind. einmal starten und beenden' }
+        'OK'   = @{ Color=$Global:SuiteColors.StatusOK; Text='Profil aktiv - alle Kern-Werte gesetzt' }
+        'WARN' = @{ Color=$Global:SuiteColors.StatusWarn; Text='Profil nicht (vollstaendig) aktiv - Werte weichen ab' }
+        'BAD'  = @{ Color=$Global:SuiteColors.StatusError; Text='Profil nicht aktiv' }
+        'SKIP' = @{ Color=$Global:SuiteColors.TextSecondary; Text='GameUserSettings.ini nicht gefunden - PUBG mind. einmal starten und beenden' }
     }
     $si = $statusInfo[$status]; if (-not $si) { $si = $statusInfo['SKIP'] }
     $ctrls.lblGfxStatus.Text = "[$status]  $($si.Text)"
@@ -2918,10 +2813,10 @@ function Update-CapToolStatus {
     $pm = Get-PresentMonPath
     if ($pm) {
         $ctrls.lblCapToolStatus.Text = "installiert ($([System.IO.Path]::GetFileName($pm)))"
-        $ctrls.lblCapToolStatus.Foreground = '#4ade80'
+        $ctrls.lblCapToolStatus.Foreground = $Global:SuiteColors.StatusOK
     } else {
         $ctrls.lblCapToolStatus.Text = 'NICHT installiert - wird beim Start automatisch geladen'
-        $ctrls.lblCapToolStatus.Foreground = '#fbbf24'
+        $ctrls.lblCapToolStatus.Foreground = $Global:SuiteColors.StatusWarn
     }
 }
 
@@ -2930,13 +2825,13 @@ function Show-CapResult {
     if (-not $Result -or $Result.Error) {
         $errMsg = if ($Result) { $Result.Error } else { 'unbekannt' }
         $ctrls.lblCapLastInfo.Text = "Fehler: $errMsg"
-        $ctrls.lblCapLastInfo.Foreground = '#f87171'
+        $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.StatusError
         $ctrls.capResultGrid.Visibility = 'Collapsed'
         return
     }
     $timeStr = if ($Result.CaptureTime -is [datetime]) { $Result.CaptureTime.ToString('yyyy-MM-dd HH:mm:ss') } else { [string]$Result.CaptureTime }
     $ctrls.lblCapLastInfo.Text = "$timeStr  -  $($Result.Frames) Frames in $($Result.DurationSec)s  -  $($Result.FileName)"
-    $ctrls.lblCapLastInfo.Foreground = '#9ca3af'
+    $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.TextSecondary
     $ctrls.capResultGrid.Visibility = 'Visible'
 
     $ctrls.lblCapAvg.Text = $Result.AvgFps
@@ -2966,35 +2861,35 @@ function Show-CapResult {
     }
     $ctrls.lblCapPresentMode.Text = $displayLbl
     $modeColor = switch ($Result.PresentModeQuality) {
-        'BEST' { '#22c55e' }   # knalliges Gruen (Bestnote)
-        'OK'   { '#4ade80' }   # normales Gruen
-        'WARN' { '#fbbf24' }
-        'BAD'  { '#f87171' }
-        default{ '#e5e7eb' }
+        'BEST' { $Global:SuiteColors.StatusBest }   # knalliges Gruen (Bestnote)
+        'OK'   { $Global:SuiteColors.StatusOK }   # normales Gruen
+        'WARN' { $Global:SuiteColors.StatusWarn }
+        'BAD'  { $Global:SuiteColors.StatusError }
+        default{ $Global:SuiteColors.TextPrimary }
     }
     $ctrls.lblCapPresentMode.Foreground = $modeColor
     # Erklaerungstext in passender Severity-Farbe (BEST/OK gruen-ish, sonst normal grau)
     $ctrls.lblCapPresentExplain.Text = if ($Result.PresentModeExplain) { $Result.PresentModeExplain } else { '' }
     $ctrls.lblCapPresentExplain.Foreground = switch ($Result.PresentModeQuality) {
-        'BEST' { '#86efac' }
-        'OK'   { '#86efac' }
-        'WARN' { '#fcd34d' }
-        'BAD'  { '#fca5a5' }
-        default{ '#9ca3af' }
+        'BEST' { $Global:SuiteColors.StatusOK }
+        'OK'   { $Global:SuiteColors.StatusOK }
+        'WARN' { $Global:SuiteColors.StatusWarn }
+        'BAD'  { $Global:SuiteColors.StatusError }
+        default{ $Global:SuiteColors.TextSecondary }
     }
 
     # Bottleneck mit Farbcode
     if ($Result.Bottleneck) {
         $ctrls.lblCapBottleneck.Text = $Result.Bottleneck
         $ctrls.lblCapBottleneck.Foreground = switch ($Result.Bottleneck) {
-            'Balanced'   { '#4ade80' }
-            'GPU-Bound'  { '#fbbf24' }
-            'CPU-Bound'  { '#fbbf24' }
-            default      { '#9ca3af' }
+            'Balanced'   { $Global:SuiteColors.StatusOK }
+            'GPU-Bound'  { $Global:SuiteColors.StatusWarn }
+            'CPU-Bound'  { $Global:SuiteColors.StatusWarn }
+            default      { $Global:SuiteColors.TextSecondary }
         }
     } else {
         $ctrls.lblCapBottleneck.Text = '-'
-        $ctrls.lblCapBottleneck.Foreground = '#9ca3af'
+        $ctrls.lblCapBottleneck.Foreground = $Global:SuiteColors.TextSecondary
     }
 
     # CPU/GPU Busy Werte
@@ -3003,44 +2898,44 @@ function Show-CapResult {
     # Hoeherer Wert in gelb, anderer neutral
     if ($null -ne $Result.CpuBusyMs -and $null -ne $Result.GpuBusyMs) {
         if ($Result.CpuBusyMs -gt $Result.GpuBusyMs) {
-            $ctrls.lblCapCpuBusy.Foreground = '#fbbf24'
-            $ctrls.lblCapGpuBusy.Foreground = '#e5e7eb'
+            $ctrls.lblCapCpuBusy.Foreground = $Global:SuiteColors.StatusWarn
+            $ctrls.lblCapGpuBusy.Foreground = $Global:SuiteColors.TextPrimary
         } elseif ($Result.GpuBusyMs -gt $Result.CpuBusyMs) {
-            $ctrls.lblCapGpuBusy.Foreground = '#fbbf24'
-            $ctrls.lblCapCpuBusy.Foreground = '#e5e7eb'
+            $ctrls.lblCapGpuBusy.Foreground = $Global:SuiteColors.StatusWarn
+            $ctrls.lblCapCpuBusy.Foreground = $Global:SuiteColors.TextPrimary
         } else {
-            $ctrls.lblCapCpuBusy.Foreground = '#e5e7eb'
-            $ctrls.lblCapGpuBusy.Foreground = '#e5e7eb'
+            $ctrls.lblCapCpuBusy.Foreground = $Global:SuiteColors.TextPrimary
+            $ctrls.lblCapGpuBusy.Foreground = $Global:SuiteColors.TextPrimary
         }
     } else {
-        $ctrls.lblCapCpuBusy.Foreground = '#9ca3af'
-        $ctrls.lblCapGpuBusy.Foreground = '#9ca3af'
+        $ctrls.lblCapCpuBusy.Foreground = $Global:SuiteColors.TextSecondary
+        $ctrls.lblCapGpuBusy.Foreground = $Global:SuiteColors.TextSecondary
     }
 
     # Render Latency + Until Displayed + Click-to-Photon
     $ctrls.lblCapRenderLat.Text = if ($null -ne $Result.RenderLatencyMs) { "$($Result.RenderLatencyMs) ms" } else { 'NA' }
     $ctrls.lblCapRenderLat.Foreground = if ($null -ne $Result.RenderLatencyMs) {
-        if ($Result.RenderLatencyMs -lt 8) { '#4ade80' }
-        elseif ($Result.RenderLatencyMs -lt 16) { '#fbbf24' }
-        else { '#f87171' }
-    } else { '#9ca3af' }
+        if ($Result.RenderLatencyMs -lt 8) { $Global:SuiteColors.StatusOK }
+        elseif ($Result.RenderLatencyMs -lt 16) { $Global:SuiteColors.StatusWarn }
+        else { $Global:SuiteColors.StatusError }
+    } else { $Global:SuiteColors.TextSecondary }
 
     $ctrls.lblCapUntilDisp.Text = if ($null -ne $Result.UntilDisplayedMs) { "$($Result.UntilDisplayedMs) ms" } else { 'NA' }
-    $ctrls.lblCapUntilDisp.Foreground = if ($null -ne $Result.UntilDisplayedMs) { '#e5e7eb' } else { '#9ca3af' }
+    $ctrls.lblCapUntilDisp.Foreground = if ($null -ne $Result.UntilDisplayedMs) { $Global:SuiteColors.TextPrimary } else { $Global:SuiteColors.TextSecondary }
 
     $ctrls.lblCapClickPhoton.Text = if ($null -ne $Result.ClickToPhotonMs) { "$($Result.ClickToPhotonMs) ms" } else { 'NA' }
-    $ctrls.lblCapClickPhoton.Foreground = if ($null -ne $Result.ClickToPhotonMs) { '#e5e7eb' } else { '#6b7280' }
+    $ctrls.lblCapClickPhoton.Foreground = if ($null -ne $Result.ClickToPhotonMs) { $Global:SuiteColors.TextPrimary } else { $Global:SuiteColors.TextDisabled }
 
     if ($Result.GSyncActive) {
         $ctrls.lblCapGSync.Text = 'AKTIV'
-        $ctrls.lblCapGSync.Foreground = '#4ade80'
+        $ctrls.lblCapGSync.Foreground = $Global:SuiteColors.StatusOK
     } else {
         $ctrls.lblCapGSync.Text = 'inaktiv'
-        $ctrls.lblCapGSync.Foreground = '#9ca3af'
+        $ctrls.lblCapGSync.Foreground = $Global:SuiteColors.TextSecondary
     }
 
     $ctrls.lblCapStutter.Text = "$($Result.StutterPct)%"
-    $ctrls.lblCapStutter.Foreground = if ($Result.StutterPct -lt 0.2) { '#4ade80' } elseif ($Result.StutterPct -lt 0.5) { '#fbbf24' } else { '#f87171' }
+    $ctrls.lblCapStutter.Foreground = if ($Result.StutterPct -lt 0.2) { $Global:SuiteColors.StatusOK } elseif ($Result.StutterPct -lt 0.5) { $Global:SuiteColors.StatusWarn } else { $Global:SuiteColors.StatusError }
 }
 
 function Format-CapTimeShort {
@@ -3071,7 +2966,7 @@ function Update-CapHistory {
         # Header-Row - Spalten: Date(110), Avg(55), 1%(55), 0.1%(55), StdDev(55), Mode(200), Delta(70)
         $colWidths = @(110,55,55,55,55,200,70)
         $hdr = New-Object System.Windows.Controls.Border
-        $hdr.Background = '#0f1115'; $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+        $hdr.Background = $Global:SuiteColors.BgBase; $hdr.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
         $hdr.Margin = (New-Object System.Windows.Thickness 0,0,0,2)
         $hdrGrid = New-Object System.Windows.Controls.Grid
         $hdr.Child = $hdrGrid
@@ -3082,7 +2977,7 @@ function Update-CapHistory {
         $hdrTexts = @('DATE/TIME','AVG','1%','0.1%','STDEV','MODE','DELTA')
         for ($i = 0; $i -lt $hdrTexts.Count; $i++) {
             $tb = New-Object System.Windows.Controls.TextBlock
-            $tb.Text = $hdrTexts[$i]; $tb.Foreground = '#9ca3af'; $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
+            $tb.Text = $hdrTexts[$i]; $tb.Foreground = $Global:SuiteColors.TextSecondary; $tb.FontSize = 10; $tb.FontWeight = 'SemiBold'
             [System.Windows.Controls.Grid]::SetColumn($tb, $i)
             $hdrGrid.Children.Add($tb) | Out-Null
         }
@@ -3104,7 +2999,7 @@ function Update-CapHistory {
         foreach ($e in $recent) {
             try {
                 $row = New-Object System.Windows.Controls.Border
-                $row.Background = '#1a1d23'; $row.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
+                $row.Background = $Global:SuiteColors.Surface1; $row.Padding = (New-Object System.Windows.Thickness 8,4,8,4)
                 $row.Margin = (New-Object System.Windows.Thickness 0,1,0,0)
                 $row.CornerRadius = (New-Object System.Windows.CornerRadius 2)
                 $row.Cursor = [System.Windows.Input.Cursors]::Hand
@@ -3118,14 +3013,14 @@ function Update-CapHistory {
                 }
 
                 # Delta vs Baseline berechnen
-                $delta = ''; $deltaColor = '#9ca3af'
+                $delta = ''; $deltaColor = $Global:SuiteColors.TextSecondary
                 if ($baselineAvg -gt 0 -and $null -ne $e.AvgFps -and $e -ne $baseline) {
                     $diff = [double]$e.AvgFps - $baselineAvg
                     $sign = if ($diff -ge 0) { '+' } else { '' }
                     $delta = "$sign$([math]::Round($diff, 1))"
-                    if ($diff -gt 2) { $deltaColor = '#4ade80' }
-                    elseif ($diff -lt -2) { $deltaColor = '#f87171' }
-                    else { $deltaColor = '#fbbf24' }
+                    if ($diff -gt 2) { $deltaColor = $Global:SuiteColors.StatusOK }
+                    elseif ($diff -lt -2) { $deltaColor = $Global:SuiteColors.StatusError }
+                    else { $deltaColor = $Global:SuiteColors.StatusWarn }
                 }
 
                 # Mode-Label: PresentMon v2 schreibt schon Strings wie "Hardware: Legacy Flip".
@@ -3136,13 +3031,13 @@ function Update-CapHistory {
                 $modeStr = $modeStr -replace '^Mode\s+',''
                 # Mode-Farbe nach Quality (BEST=knall-gruen, OK=gruen, WARN=gelb, BAD=rot)
                 $modeColor = switch -Wildcard ($modeStr) {
-                    '*Independent Flip*'  { '#22c55e' }
-                    '*Legacy Flip*'       { '#22c55e' }
-                    '*Composed Flip*'     { '#4ade80' }
-                    '*Legacy Copy*'       { '#4ade80' }
-                    '*Composed Copy*'     { '#f87171' }
-                    '*Composition Atlas*' { '#fbbf24' }
-                    default               { '#e5e7eb' }
+                    '*Independent Flip*'  { $Global:SuiteColors.StatusBest }
+                    '*Legacy Flip*'       { $Global:SuiteColors.StatusBest }
+                    '*Composed Flip*'     { $Global:SuiteColors.StatusOK }
+                    '*Legacy Copy*'       { $Global:SuiteColors.StatusOK }
+                    '*Composed Copy*'     { $Global:SuiteColors.StatusError }
+                    '*Composition Atlas*' { $Global:SuiteColors.StatusWarn }
+                    default               { $Global:SuiteColors.TextPrimary }
                 }
                 $vals = @(
                     (Format-CapTimeShort $e.CaptureTime),
@@ -3153,7 +3048,7 @@ function Update-CapHistory {
                     $modeStr,
                     $delta
                 )
-                $cols = @('#d1d5db','#4ade80','#fbbf24','#f87171','#60a5fa',$modeColor,$deltaColor)
+                $cols = @($Global:SuiteColors.TextPrimary,$Global:SuiteColors.StatusOK,$Global:SuiteColors.StatusWarn,$Global:SuiteColors.StatusError,$Global:SuiteColors.Accent,$modeColor,$deltaColor)
                 for ($i = 0; $i -lt 7; $i++) {
                     $tb = New-Object System.Windows.Controls.TextBlock
                     $tb.Text = "$($vals[$i])"; $tb.Foreground = $cols[$i]; $tb.FontSize = 11
@@ -3173,8 +3068,8 @@ function Update-CapHistory {
                 })
 
                 # Hover-Effekt
-                $row.Add_MouseEnter({ $this.Background = '#252830' })
-                $row.Add_MouseLeave({ $this.Background = '#1a1d23' })
+                $row.Add_MouseEnter({ $this.Background = $Global:SuiteColors.Surface2 })
+                $row.Add_MouseLeave({ $this.Background = $Global:SuiteColors.Surface1 })
 
                 $ctrls.capHistoryList.Children.Add($row) | Out-Null
             } catch {
@@ -3188,7 +3083,7 @@ function Update-CapHistory {
 
 function Stop-CaptureTimer {
     if ($Global:CaptureState.Timer) {
-        try { $Global:CaptureState.Timer.Stop() } catch {}
+        try { $Global:CaptureState.Timer.Stop() } catch {}  # Timer evtl. schon gestoppt - unkritisch
         $Global:CaptureState.Timer = $null
     }
 }
@@ -3219,13 +3114,13 @@ function Start-PUBGCapture {
     $pm = Get-PresentMonPath
     if (-not $pm) {
         $ctrls.lblCapPhase.Text = 'PresentMon nicht installiert - lade von GitHub...'
-        $ctrls.lblCapPhase.Foreground = '#fbbf24'
+        $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusWarn
         Write-SuiteLog "PresentMon nicht gefunden - starte Auto-Install" 'INFO'
         $pm = Install-PresentMonFromGitHub
         Update-CapToolStatus
         if (-not $pm) {
             $ctrls.lblCapPhase.Text = 'PresentMon-Install fehlgeschlagen - Logs pruefen'
-            $ctrls.lblCapPhase.Foreground = '#f87171'
+            $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
             return
         }
     }
@@ -3234,7 +3129,7 @@ function Start-PUBGCapture {
     $pubg = @(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue)
     if ($pubg.Count -eq 0) {
         $ctrls.lblCapPhase.Text = 'PUBG (TslGame.exe) laeuft nicht - erst Spiel starten + ins Match'
-        $ctrls.lblCapPhase.Foreground = '#f87171'
+        $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
         return
     }
 
@@ -3264,7 +3159,7 @@ function Start-PUBGCapture {
             if ($state.Phase -eq 'countdown') {
                 if ($state.SecondsRemaining -gt 0) {
                     $ctrls.lblCapPhase.Text = "Capture startet in $($state.SecondsRemaining)s - jetzt Alt+Tab zu PUBG!"
-                    $ctrls.lblCapPhase.Foreground = '#fbbf24'
+                    $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusWarn
                     $state.SecondsRemaining--
                 } else {
                     # Switch zu capturing
@@ -3279,11 +3174,11 @@ function Start-PUBGCapture {
                         }
                         $state.Process = $proc
                         $ctrls.lblCapPhase.Text = "Capturing 60s - in PUBG normal spielen"
-                        $ctrls.lblCapPhase.Foreground = '#4ade80'
+                        $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusOK
                         Write-SuiteLog "PresentMon gestartet PID $($proc.Id)"
                     } catch {
                         $ctrls.lblCapPhase.Text = "Fehler beim PresentMon-Start: $($_.Exception.Message)"
-                        $ctrls.lblCapPhase.Foreground = '#f87171'
+                        $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
                         Write-SuiteLog "PresentMon-Start Fehler: $($_.Exception.Message)" 'ERROR'
                         Cleanup-CapState
                         return
@@ -3298,7 +3193,7 @@ function Start-PUBGCapture {
                 if ($state.Process -and $state.Process.HasExited) {
                     $state.Phase = 'analyzing'
                     $ctrls.lblCapPhase.Text = 'Analyse...'
-                    $ctrls.lblCapPhase.Foreground = '#60a5fa'
+                    $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.Accent
                 }
             } elseif ($state.Phase -eq 'analyzing') {
                 Stop-CaptureTimer
@@ -3306,14 +3201,14 @@ function Start-PUBGCapture {
                 $result = Analyze-CaptureCSV -CsvPath $state.OutputCsv
                 if ($result.Error) {
                     $ctrls.lblCapPhase.Text = "Analyse-Fehler: $($result.Error)"
-                    $ctrls.lblCapPhase.Foreground = '#f87171'
+                    $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
                     Write-SuiteLog "Capture Analyse Fehler: $($result.Error)" 'ERROR'
                 } else {
                     Show-CapResult $result
                     Add-CaptureEntry $result
                     Update-CapHistory
                     $ctrls.lblCapPhase.Text = "Fertig - $($result.Frames) Frames erfasst, AvgFps $($result.AvgFps)"
-                    $ctrls.lblCapPhase.Foreground = '#4ade80'
+                    $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusOK
                     Write-SuiteLog "Capture fertig: AvgFps=$($result.AvgFps) 1%=$($result.OnePctLow) Mode=$($result.PresentMode)"
                     $Global:CaptureState.LastResult = $result
                 }
@@ -3322,7 +3217,7 @@ function Start-PUBGCapture {
         } catch {
             Write-SuiteLog "Capture-Timer Fehler: $($_.Exception.Message)" 'ERROR'
             $ctrls.lblCapPhase.Text = "Timer-Fehler: $($_.Exception.Message)"
-            $ctrls.lblCapPhase.Foreground = '#f87171'
+            $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
             Cleanup-CapState
         }
     })
@@ -3334,7 +3229,7 @@ $ctrls.btnCapStart.Add_Click({ Start-PUBGCapture })
 $ctrls.btnCapStop.Add_Click({
     Write-SuiteLog "Capture manuell abgebrochen" 'WARN'
     $ctrls.lblCapPhase.Text = 'Abgebrochen.'
-    $ctrls.lblCapPhase.Foreground = '#fbbf24'
+    $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusWarn
     Cleanup-CapState
 })
 $ctrls.btnCapOpenCsv.Add_Click({
@@ -3364,7 +3259,7 @@ function Format-Delta {
     $diffStr = "$sign$([math]::Round($diff, 1))$Unit"
     $pctStr = "($sign$([math]::Round($pct, 1))%)"
     $isPositive = if ($LowerIsBetter) { $diff -lt 0 } else { $diff -gt 0 }
-    $color = if ([math]::Abs($pct) -lt 1) { '#9ca3af' } elseif ($isPositive) { '#4ade80' } else { '#f87171' }
+    $color = if ([math]::Abs($pct) -lt 1) { $Global:SuiteColors.TextSecondary } elseif ($isPositive) { $Global:SuiteColors.StatusOK } else { $Global:SuiteColors.StatusError }
     return @{ Text = "$diffStr $pctStr"; Color = $color }
 }
 
@@ -3423,7 +3318,7 @@ $ctrls.btnCapClearHist.Add_Click({
         Update-CapHistory
         $ctrls.capResultGrid.Visibility = 'Collapsed'
         $ctrls.lblCapLastInfo.Text = 'History geloescht.'
-        $ctrls.lblCapLastInfo.Foreground = '#9ca3af'
+        $ctrls.lblCapLastInfo.Foreground = $Global:SuiteColors.TextSecondary
     }
 })
 
@@ -3436,7 +3331,8 @@ if ($hist.Count -gt 0) {
     $lastEntry = $hist[-1]
     $freshResult = $null
     if ($lastEntry.CsvPath -and (Test-Path $lastEntry.CsvPath)) {
-        try { $freshResult = Analyze-CaptureCSV -CsvPath $lastEntry.CsvPath } catch {}
+        try { $freshResult = Analyze-CaptureCSV -CsvPath $lastEntry.CsvPath }
+        catch { Write-SuiteLog "Capture-History: Re-Analyse fehlgeschlagen ($($_.Exception.Message)) - nutze gespeicherten Eintrag" 'WARN' }
     }
     $displayResult = if ($freshResult -and -not $freshResult.Error) { $freshResult } else { $lastEntry }
     $Global:CaptureState.LastResult = $displayResult
@@ -3454,10 +3350,10 @@ if ($ctrls.lblAboutVersion) {
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($isAdmin) {
     $ctrls.lblAdmin.Text = 'Admin: JA'
-    $ctrls.adminBadge.Background = '#16a34a'
+    $ctrls.adminBadge.Background = $Global:SuiteColors.StatusOK
 } else {
     $ctrls.lblAdmin.Text = 'Admin: NEIN'
-    $ctrls.adminBadge.Background = '#dc2626'
+    $ctrls.adminBadge.Background = $Global:SuiteColors.StatusError
 }
 
 # Config aus File laden (MonitorPattern etc.)
@@ -3501,7 +3397,7 @@ $window.Add_Closing({
             Write-SuiteLog "Window-Close: stoppe laufende Capture" 'INFO'
             Cleanup-CapState
         }
-    } catch {}
+    } catch {}  # Fenster schliesst ohnehin - Fehler hier unkritisch
 })
 
 # Show
