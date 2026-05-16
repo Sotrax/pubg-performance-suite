@@ -32,7 +32,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.25.0-beta'
+    Version    = '0.26.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -56,7 +56,7 @@ $Global:Suite = @{
         NPI  = 'C:\Tools\nvidiaProfileInspector\nvidiaProfileInspector.exe'
         PM   = 'C:\Tools\PresentMon'
     }
-    MonitorPattern = 'XB271HU'
+    MonitorPattern = ''   # leer = Solo-Setup, kein Monitor wird im Game-Mode deaktiviert. Per 'Detect & Fill' befuellbar.
     PUBGSteamURI   = 'steam://run/578080'
     RepoSlug       = 'Sotrax/pubg-performance-suite'  # fuer den Update-Check
 }
@@ -125,7 +125,7 @@ function Get-SuiteConfig {
         catch { Write-SuiteLog "Get-SuiteConfig: Config unlesbar oder ungueltiges JSON - nutze Defaults ($($_.Exception.Message))" 'WARN' }
     }
     return [PSCustomObject]@{
-        MonitorPattern = 'XB271HU'
+        MonitorPattern = ''   # Default Solo-Setup - per 'Detect & Fill' aus Sekundaer-Monitoren befuellbar
         Theme = 'Dark'
         LastSeen = (Get-Date).ToString('o')
     }
@@ -341,6 +341,29 @@ function Get-LiveStatus {
             $s['Engine.ini'] = @{ Value='Tweaks fehlen'; Status='WARN' }
         }
     } else { $s['Engine.ini'] = @{ Value='nicht gefunden'; Status='SKIP' } }
+
+    # FPS-Cap: In-Game-FrameRateLimit soll = Monitor-Hz (Display-Based) sein,
+    # der scharfe Competitive-Cap (Hz-3) kommt vom NVIDIA-Treiber-Limiter.
+    $gusFps = "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini"
+    if (Test-Path $gusFps) {
+        $hzFps = Get-PrimaryMonitorHz
+        $gcFps = Get-Content $gusFps -Raw -ErrorAction SilentlyContinue
+        $npiOk = Test-Path $Global:Suite.NPIStamp
+        if ($gcFps -and ($gcFps -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)')) {
+            $frl = [int][math]::Floor([double]$matches[1])
+            if ($frl -eq $hzFps -and $npiOk) {
+                $s['FPS-Cap'] = @{ Value="In-Game $frl + Treiber $($hzFps - 3)"; Status='OK' }
+            } elseif ($frl -eq $hzFps) {
+                $s['FPS-Cap'] = @{ Value="In-Game $frl, Treiber-Cap fehlt"; Status='WARN' }
+            } else {
+                $s['FPS-Cap'] = @{ Value="$frl FPS (nicht Display-Based)"; Status='WARN' }
+            }
+        } else {
+            $s['FPS-Cap'] = @{ Value='kein Cap gesetzt'; Status='WARN' }
+        }
+    } else {
+        $s['FPS-Cap'] = @{ Value='GameUserSettings.ini fehlt'; Status='SKIP' }
+    }
 
     # NPI Stamp
     if (Test-Path $Global:Suite.NPIStamp) {
@@ -666,8 +689,24 @@ function Invoke-EsportGfxApply {
                 $null = Update-IniValue -Path $gus -Section $resSection -Key "LastUserConfirmedResolutionSize$axis" -Value $matches[1]
             }
         }
-        Write-SuiteLog 'esportgfx: Competitive-Grafik-Profil + LastUserConfirmed-Keys geschrieben' 'INFO'
-        return @{ Success=$true; Message='Competitive-Grafik-Profil angewendet'; Snapshot=$snap }
+        # FPS-Cap menuekonform setzen = In-Game "Display Based" (FrameRateLimit auf
+        # die Monitor-Hz). FrameRateLimit liegt in [/Script/TslGame.TslGameUserSettings].
+        # Ein krummer Wert wie 237 ist ueber das Spiel-Menue NICHT erzeugbar und wird
+        # von PUBG beim Start zurueckgesetzt - der scharfe Competitive-Cap (Hz minus 3)
+        # laeuft daher ueber den NVIDIA Frame Rate Limiter (Tweak 'nvprofile').
+        $capHz = Get-PrimaryMonitorHz
+        $capWritten = Update-IniValue -Path $gus -Section $resSection -Key 'FrameRateLimit' -Value ('{0}.000000' -f $capHz)
+        # Post-Apply-Verifikation: FrameRateLimit zuruecklesen
+        $vNow = Get-Content $gus -Raw -ErrorAction SilentlyContinue
+        $capOk = $capWritten -and ($vNow -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)') `
+                 -and ([int][math]::Floor([double]$matches[1]) -eq $capHz)
+        $capMsg = if ($capOk) {
+            "FPS-Cap: In-Game Display-Based ($capHz) - scharfer Cap $($capHz - 3) via NVIDIA-Profil (Tweak 'nvprofile' anwenden)"
+        } else {
+            'WARN: FrameRateLimit (FPS-Cap) konnte nicht verifiziert werden'
+        }
+        Write-SuiteLog "esportgfx: Competitive-Grafik-Profil + LastUserConfirmed + FrameRateLimit geschrieben - $capMsg" 'INFO'
+        return @{ Success=$true; Message="Competitive-Grafik-Profil angewendet. $capMsg"; Snapshot=$snap }
     } catch {
         Write-SuiteLog "esportgfx Apply Exception: $($_.Exception.Message)" 'ERROR'
         return @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null }
@@ -838,7 +877,11 @@ function Start-GameMode {
             & $LogCallback "MMT nicht gefunden - installiere..." 'WARN'
             $mmt = Install-MMT -LogCallback $LogCallback
         }
-        if ($mmt) {
+        if ($mmt -and [string]::IsNullOrWhiteSpace($Global:Suite.MonitorPattern)) {
+            # Kein Pattern (Solo-Setup) - ein leeres Regex wuerde ALLE Monitore
+            # matchen. Daher hier explizit nichts deaktivieren.
+            & $LogCallback "Kein Monitor-Pattern gesetzt (Solo-Setup) - kein Monitor wird deaktiviert" 'INFO'
+        } elseif ($mmt) {
             $monitors = Get-MonitorTable -Mmt $mmt
             $toDisable = @($monitors | Where-Object { $_.'Monitor Name' -match $Global:Suite.MonitorPattern -and $_.Active -eq 'Yes' })
             $remainingActive = @($monitors | Where-Object { $_.'Monitor Name' -notmatch $Global:Suite.MonitorPattern -and $_.Active -eq 'Yes' })
@@ -994,6 +1037,9 @@ $xamlTemplate = @'
             <Setter Property="Foreground" Value="@@Accent@@"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
+        <!-- ComboBox: vollstaendiges ControlTemplate. Ohne eigenes Template rendert
+             WPF die geschlossene Box mit dem OS-Default-Style (heller Hintergrund)
+             und ignoriert Background/Foreground -> Werte waren weiss-auf-weiss. -->
         <Style TargetType="ComboBox">
             <Setter Property="Background" Value="@@Surface2@@"/>
             <Setter Property="Foreground" Value="@@TextPrimary@@"/>
@@ -1001,7 +1047,59 @@ $xamlTemplate = @'
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="6,2"/>
             <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Height" Value="26"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleButton" Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="Bd" Background="@@Surface2@@"
+                                                BorderBrush="@@BorderStrong@@" BorderThickness="1" CornerRadius="3">
+                                            <Path x:Name="Arrow" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                  Margin="0,0,8,0" Data="M 0 0 L 4 4 L 8 0 Z" Fill="@@TextSecondary@@"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="@@Accent@@"/>
+                                                <Setter TargetName="Arrow" Property="Fill" Value="@@TextPrimary@@"/>
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="@@Accent@@"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="ContentSite" IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"
+                                              Margin="8,0,26,0" VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                            <Popup x:Name="Popup" Placement="Bottom" Focusable="False" AllowsTransparency="True"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Slide">
+                                <Border x:Name="DropDownBorder" Background="@@Surface2@@"
+                                        BorderBrush="@@BorderStrong@@" BorderThickness="1" CornerRadius="3"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer SnapsToDevicePixels="True">
+                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="@@TextDisabled@@"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style TargetType="ComboBoxItem">
             <Setter Property="Background" Value="@@Surface1@@"/>
@@ -1427,7 +1525,7 @@ $xamlTemplate = @'
                     <TextBlock Grid.Row="0" Text="Aktionen die 'Start Game Mode' ausfuehrt" FontSize="14" FontWeight="Bold" Foreground="@@Accent@@" Margin="0,0,0,10"/>
 
                     <StackPanel Grid.Row="1" Margin="0,0,0,16">
-                        <CheckBox x:Name="cbMonitors" Content="Monitore: nur OLED aktiv (Acer XB271HU deaktivieren)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
+                        <CheckBox x:Name="cbMonitors" Content="Monitore: Sekundaer-Monitore deaktivieren (laut Monitor-Pattern in Settings)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbRTSS" Content="RTSS Prozesse beenden (kritisch fuer Mode 3/1)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbBackground" Content="Hintergrund-Apps schliessen (Chrome, Spotify, Battle.net, Epic, OBS - Discord bleibt fuer Voice)" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="True"/>
                         <CheckBox x:Name="cbLaunch" Content="PUBG via Steam direkt starten" Foreground="@@TextPrimary@@" Margin="0,4" IsChecked="False"/>
@@ -1518,13 +1616,19 @@ $xamlTemplate = @'
                         <!-- Einzel-Einstellungen-Card (granulare Dropdowns) -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="Einzel-Einstellungen" Style="{StaticResource SectionHeader}"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Einzel-Einstellungen" Style="{StaticResource SectionHeader}"/>
+                                    <Border x:Name="gfxMatchBadge" Background="@@BorderStrong@@" CornerRadius="3" Padding="6,1" Margin="10,-2,0,8" VerticalAlignment="Center">
+                                        <TextBlock x:Name="lblGfxMatchBadge" Text="Competitive-Match: -" Foreground="@@TextPrimary@@" FontSize="10" FontWeight="SemiBold"/>
+                                    </Border>
+                                </StackPanel>
                                 <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"
-                                           Text="Jede Grafik-Option einzeln waehlen und mit 'Einzel-Werte anwenden' in GameUserSettings.ini schreiben. Die Dropdowns zeigen die aktuell gesetzten Werte. Der Knopf 'Competitive-Profil anwenden' unten setzt jederzeit ALLES wieder auf das erarbeitete Esport-Profil zurueck."/>
+                                           Text="Jede Grafik-Option einzeln waehlen und mit 'Einzel-Werte anwenden' in GameUserSettings.ini schreiben. Die Dropdowns zeigen die aktuell gesetzten Werte. Das Statusfeld rechts zeigt, ob der Wert dem Competitive-Soll entspricht. Der Knopf 'Competitive-Profil anwenden' unten setzt jederzeit ALLES wieder auf das erarbeitete Esport-Profil zurueck."/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170"/>
                                         <ColumnDefinition Width="230"/>
+                                        <ColumnDefinition Width="90"/>
                                     </Grid.ColumnDefinitions>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1537,12 +1641,14 @@ $xamlTemplate = @'
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Anzeigemodus" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="lblIndFullscreen" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="0" Grid.Column="1" x:Name="cmbFullscreen" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Exklusiv-Vollbild"/>
                                         <ComboBoxItem Tag="1" Content="Vollbild-Fenster"/>
                                         <ComboBoxItem Tag="2" Content="Fenster"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Anti-Aliasing" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="lblIndAA" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="1" Grid.Column="1" x:Name="cmbAA" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1551,6 +1657,7 @@ $xamlTemplate = @'
                                         <ComboBoxItem Tag="4" Content="Ultra"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Texturen" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" x:Name="lblIndTexture" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="2" Grid.Column="1" x:Name="cmbTexture" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1559,6 +1666,7 @@ $xamlTemplate = @'
                                         <ComboBoxItem Tag="4" Content="Ultra"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="3" Grid.Column="0" Text="Sichtweite" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="2" x:Name="lblIndViewDist" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="3" Grid.Column="1" x:Name="cmbViewDist" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1567,6 +1675,7 @@ $xamlTemplate = @'
                                         <ComboBoxItem Tag="4" Content="Ultra"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="4" Grid.Column="0" Text="Schatten" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="4" Grid.Column="2" x:Name="lblIndShadow" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="4" Grid.Column="1" x:Name="cmbShadow" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1575,6 +1684,7 @@ $xamlTemplate = @'
                                         <ComboBoxItem Tag="4" Content="Ultra"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="5" Grid.Column="0" Text="Post-Processing" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="5" Grid.Column="2" x:Name="lblIndPost" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="5" Grid.Column="1" x:Name="cmbPost" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1583,6 +1693,7 @@ $xamlTemplate = @'
                                         <ComboBoxItem Tag="4" Content="Ultra"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="6" Grid.Column="0" Text="Effekte" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="6" Grid.Column="2" x:Name="lblIndEffects" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="6" Grid.Column="1" x:Name="cmbEffects" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1591,6 +1702,7 @@ $xamlTemplate = @'
                                         <ComboBoxItem Tag="4" Content="Ultra"/>
                                     </ComboBox>
                                     <TextBlock Grid.Row="7" Grid.Column="0" Text="Laub" Foreground="@@TextPrimary@@" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="7" Grid.Column="2" x:Name="lblIndFoliage" Text="" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="8,4,0,4"/>
                                     <ComboBox Grid.Row="7" Grid.Column="1" x:Name="cmbFoliage" Margin="0,4">
                                         <ComboBoxItem Tag="0" Content="Sehr Niedrig"/>
                                         <ComboBoxItem Tag="1" Content="Niedrig"/>
@@ -1803,6 +1915,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'btnFilterAll','btnFilterOpen','btnFilterDone',
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
     'cmbFullscreen','cmbAA','cmbTexture','cmbViewDist','cmbShadow','cmbPost','cmbEffects','cmbFoliage','btnGfxApplyCustom','lblGfxCustomInfo',
+    'lblIndFullscreen','lblIndAA','lblIndTexture','lblIndViewDist','lblIndShadow','lblIndPost','lblIndEffects','lblIndFoliage','lblGfxMatchBadge','gfxMatchBadge',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'btnRefreshBackups','lblBackupInfo','backupList',
@@ -1856,6 +1969,7 @@ function Update-StatusGrid {
     if ($live['Engine.ini'].Status -ne 'OK')   { $recos += @{ Sev='WARN'; Title='Engine.ini Tweaks fehlen'; Detail='Sharpen + Streaming + Pacing nicht gesetzt. Tweak: "Engine.ini Tweaks"'; TabIdx=1 } }
     if ($live['NV Profil'].Status -ne 'OK')    { $recos += @{ Sev='WARN'; Title='NVIDIA Profile nicht applied'; Detail='Reflex + Power Mgmt + Threaded Optim. nicht via NPI gesetzt. Tweak: "NVIDIA Profile"'; TabIdx=1 } }
     if ($live['Defender'].Status -eq 'WARN')   { $recos += @{ Sev='WARN'; Title='Defender ohne PUBG-Exclusion'; Detail='Realtime-Scan auf PUBG-Files kostet I/O. Tweak: "Defender Exclusion"'; TabIdx=1 } }
+    if ($live['FPS-Cap'] -and $live['FPS-Cap'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='FPS-Cap nicht vollstaendig'; Detail='In-Game-Cap auf Display-Based (Monitor-Hz) setzen UND das NVIDIA-Profil anwenden - der scharfe Cap (Hz-3) laeuft ueber den Treiber-Limiter. Tweaks: "PUBG In-Game FPS-Cap" + "NVIDIA PUBG-Profil"'; TabIdx=1 } }
 
     $ctrls.recoList.Children.Clear()
     if ($recos.Count -eq 0) {
@@ -1917,7 +2031,7 @@ function Update-StatusGrid {
     }
 
     # Top-Status: nur Tweak-relevante Checks zaehlen, nicht INFO (PUBG/GPU/CPU/Display)
-    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender')
+    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender','FPS-Cap')
     $okCount = 0; $totalCount = 0
     foreach ($k in $tweakKeys) {
         if ($live[$k]) {
@@ -2064,9 +2178,35 @@ function Update-DetectedHardware {
 CPU:             $cpu
 GPU:             $gpuName$vramTxt
 RAM:             $ram GB
-Monitor (Hz):    $hz Hz  (dynamischer FPS-Cap: $cap)
+Monitor (Hz):    $hz Hz  (In-Game-Cap: $hz / NVIDIA-Treiber-Cap: $cap)
 Aktive Displays: $([System.Windows.Forms.Screen]::AllScreens.Count) (vom DWM genutzt)
 "@
+}
+
+# EDID-Hersteller-Codes (PNP Vendor IDs) -> Klartext. Wenn ein Monitor keinen
+# UserFriendlyName liefert (haeufig bei OLEDs ueber DisplayPort), kommt nur der
+# rohe Code wie 'AUS27F5' - die ersten 3 Zeichen sind die Hersteller-ID.
+$Global:EdidVendors = @{
+    AUS='ASUS'; ASU='ASUS'; ACI='Acer'; ACR='Acer'; SAM='Samsung'; SDC='Samsung'
+    GSM='LG'; LGD='LG Display'; DEL='Dell'; BNQ='BenQ'; AOC='AOC'; MSI='MSI'
+    GBT='Gigabyte'; HPN='HP'; HWP='HP'; HPQ='HP'; VSC='ViewSonic'; PHL='Philips'
+    NEC='NEC'; EIZ='EIZO'; IVM='iiyama'; LEN='Lenovo'; APP='Apple'; HEI='Hisense'
+    CMN='ChiMei'; AUO='AU Optronics'; SHP='Sharp'; DGC='Dell'
+}
+
+# Loest einen rohen EDID-Code ('AUS27F5') zu 'ASUS 27F5' auf. Gibt bei
+# unbekanntem Hersteller den Code unveraendert zurueck, bei leerem Input $null.
+function Resolve-EdidName {
+    param([string]$Code)
+    if ([string]::IsNullOrWhiteSpace($Code)) { return $null }
+    $c = $Code.Trim()
+    if ($c.Length -lt 4) { return $c }
+    $vid  = $c.Substring(0,3).ToUpper()
+    $rest = $c.Substring(3).Trim()
+    if ($Global:EdidVendors.ContainsKey($vid)) {
+        return (("$($Global:EdidVendors[$vid]) $rest").Trim())
+    }
+    return $c
 }
 
 function Update-MonitorList {
@@ -2081,8 +2221,10 @@ function Update-MonitorList {
         foreach ($m in $ids) {
             $manu = ($m.ManufacturerName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
             $model = ($m.UserFriendlyName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join ''
+            # 3-Letter-PNP-Code zu Klartext aufloesen (AUS -> ASUS)
+            $manuName = if ($manu -and $Global:EdidVendors.ContainsKey($manu.ToUpper())) { $Global:EdidVendors[$manu.ToUpper()] } else { $manu }
             $monitors += [PSCustomObject]@{
-                'Monitor Name' = "$manu $model"
+                'Monitor Name' = ("$manuName $model").Trim()
                 'Short Monitor ID' = ''
                 Active = if ($m.Active) {'Yes'} else {'No'}
             }
@@ -2142,10 +2284,13 @@ function Update-MonitorList {
         $nmTxt = New-Object System.Windows.Controls.TextBlock
         $nm = $m.'Monitor Name'
         if (-not $nm) {
-            # Falls Name leer - oft bei OLED via DisplayPort - via Manu+Product zeigen
-            $manu = $m.'Monitor Serial Number'
-            if (-not $manu) { $manu = '(EDID liefert kein Friendly-Name - vermutlich OLED ueber DP)' }
-            $nm = $manu
+            # Falls Name leer - oft bei OLED via DisplayPort - rohen EDID-Code aufloesen
+            $resolved = Resolve-EdidName $m.'Monitor Serial Number'
+            if ($resolved) { $nm = $resolved }
+            else { $nm = '(EDID liefert kein Friendly-Name - vermutlich OLED ueber DP)' }
+        } else {
+            # MMT-Name kann selbst ein roher EDID-Code sein (z.B. 'AUS27F5')
+            if ($nm -match '^[A-Za-z]{3}[A-Za-z0-9]{2,}$') { $nm = Resolve-EdidName $nm }
         }
         $nmTxt.Text = $nm; $nmTxt.Foreground = $Global:SuiteColors.TextPrimary; $nmTxt.FontSize = 11
         $nmTxt.VerticalAlignment = 'Center'
@@ -2537,7 +2682,12 @@ function Rebuild-CaptureHistoryFromCsv {
 
 function Analyze-CaptureCSV {
     param([string]$CsvPath)
-    if (-not (Test-Path $CsvPath)) { return $null }
+    # Kontrakt: IMMER eine Hashtable zurueckgeben - entweder ein Ergebnis oder
+    # @{ Error=... }. Frueher kam hier $null zurueck, was der Capture-Timer als
+    # Erfolg fehldeutete (Bug: "Fehler: unbekannt" + leere Fertig-Meldung).
+    if ([string]::IsNullOrWhiteSpace($CsvPath) -or -not (Test-Path $CsvPath)) {
+        return @{ Error = 'PresentMon-CSV nicht gefunden - Capture hat keine Datei erzeugt' }
+    }
     try {
         $data = Import-Csv $CsvPath
         if ($data.Count -lt 10) {
@@ -3002,20 +3152,43 @@ function Update-TweaksTab {
         }
     }
 
+    # Counter-Buckets: jeder Tweak faellt in GENAU einen Bucket, Summe == total.
+    #   offen         = Status WARN/BAD (Apply noch noetig)
+    #   angewendet    = Status OK + von der Suite angewendet (Revert-Snapshot vorhanden)
+    #   by_default_ok = Status OK, war schon ohne Apply korrekt (kein Snapshot,
+    #                   grauer 'Applied'-Button) - taucht nicht in der History auf
+    #   na            = Status SKIP / nicht ermittelbar
     $total = $Global:Tweaks.Count
-    $okCnt = @($tweakStatuses.Values | Where-Object { $_ -eq 'OK' }).Count
-    $needCnt = @($tweakStatuses.Values | Where-Object { $_ -eq 'WARN' -or $_ -eq 'BAD' }).Count
+    $needCnt = 0; $appliedCnt = 0; $byDefaultCnt = 0; $naCnt = 0
+    foreach ($t in $Global:Tweaks) {
+        switch ($tweakStatuses[$t.Id]) {
+            'OK'    { if (Test-TweakRevertable -Tweak $t) { $appliedCnt++ } else { $byDefaultCnt++ } }
+            'WARN'  { $needCnt++ }
+            'BAD'   { $needCnt++ }
+            default { $naCnt++ }   # SKIP / unbekannt
+        }
+    }
+    $okCnt = $appliedCnt + $byDefaultCnt   # = was die 'Erledigt'-Filteransicht zeigt
+    # Invariant: kein Tweak darf durchs Raster fallen (Bug #5).
+    $bucketSum = $needCnt + $appliedCnt + $byDefaultCnt + $naCnt
+    if ($bucketSum -ne $total) {
+        Write-SuiteLog "Tweak-Counter-Invariante verletzt: offen=$needCnt angewendet=$appliedCnt byDefaultOK=$byDefaultCnt na=$naCnt Summe=$bucketSum != total=$total" 'WARN'
+    }
+    # Fuer das Dashboard (Bug #6) bereitstellen
+    $Global:TweakCounts = @{ Total=$total; Open=$needCnt; Applied=$appliedCnt; ByDefaultOk=$byDefaultCnt; Na=$naCnt }
     $sel = @($Global:TweakSelection.GetEnumerator() | Where-Object { $_.Value }).Count
 
     # Filter-Button-Labels mit Counts
     $ctrls.btnFilterAll.Content = "Alle ($total)"
     $ctrls.btnFilterOpen.Content = "Offen ($needCnt)"
-    $ctrls.btnFilterDone.Content = "Angewendet ($okCnt)"
+    $ctrls.btnFilterDone.Content = "Erledigt ($okCnt)"
 
     Update-FilterButtonStyles
 
     # Info-Zeile (vorhandene Last-Apply-Info aus Global state behalten)
-    $base = "$okCnt von $total angewendet  |  $needCnt offen  |  $sel selektiert  |  Filter: $($Global:TweakFilter)"
+    $base = "$appliedCnt angewendet + $byDefaultCnt by-default OK von $total  |  $needCnt offen"
+    if ($naCnt -gt 0) { $base += "  |  $naCnt n/a" }
+    $base += "  |  $sel selektiert  |  Filter: $($Global:TweakFilter)"
     if ($Global:LastApplyInfo) {
         $ctrls.lblTweakInfo.Text = "$base`n$($Global:LastApplyInfo)"
     } else {
@@ -3243,14 +3416,67 @@ function Sync-GraphicsDropdowns {
         return '0'
     }
     $sg = 'ScalabilityGroups'; $ts = '/Script/TslGame.TslGameUserSettings'
-    Set-CbByTag $ctrls.cmbFullscreen (& $getVal $ts 'FullscreenMode')
-    Set-CbByTag $ctrls.cmbAA         (& $getVal $sg 'sg.AntiAliasingQuality')
-    Set-CbByTag $ctrls.cmbTexture    (& $getVal $sg 'sg.TextureQuality')
-    Set-CbByTag $ctrls.cmbViewDist   (& $getVal $sg 'sg.ViewDistanceQuality')
-    Set-CbByTag $ctrls.cmbShadow     (& $getVal $sg 'sg.ShadowQuality')
-    Set-CbByTag $ctrls.cmbPost       (& $getVal $sg 'sg.PostProcessQuality')
-    Set-CbByTag $ctrls.cmbEffects    (& $getVal $sg 'sg.EffectsQuality')
-    Set-CbByTag $ctrls.cmbFoliage    (& $getVal $sg 'sg.FoliageQuality')
+
+    # Mapping: UI-Label -> ini-Key. Eine Quelle fuer Dropdown-Befuellung und
+    # Status-Indikator. Die Soll-Werte stammen aus $Global:EsportGfxProfile
+    # (PUBGProfile.psd1) - dieselbe Quelle, gegen die der Report prueft.
+    $map = @(
+        @{ Cb=$ctrls.cmbFullscreen; Ind=$ctrls.lblIndFullscreen; Sec=$ts; Key='FullscreenMode' }
+        @{ Cb=$ctrls.cmbAA;         Ind=$ctrls.lblIndAA;         Sec=$sg; Key='sg.AntiAliasingQuality' }
+        @{ Cb=$ctrls.cmbTexture;    Ind=$ctrls.lblIndTexture;    Sec=$sg; Key='sg.TextureQuality' }
+        @{ Cb=$ctrls.cmbViewDist;   Ind=$ctrls.lblIndViewDist;   Sec=$sg; Key='sg.ViewDistanceQuality' }
+        @{ Cb=$ctrls.cmbShadow;     Ind=$ctrls.lblIndShadow;     Sec=$sg; Key='sg.ShadowQuality' }
+        @{ Cb=$ctrls.cmbPost;       Ind=$ctrls.lblIndPost;       Sec=$sg; Key='sg.PostProcessQuality' }
+        @{ Cb=$ctrls.cmbEffects;    Ind=$ctrls.lblIndEffects;    Sec=$sg; Key='sg.EffectsQuality' }
+        @{ Cb=$ctrls.cmbFoliage;    Ind=$ctrls.lblIndFoliage;    Sec=$sg; Key='sg.FoliageQuality' }
+    )
+    # Soll-Wert aus dem Profil (auf Ganzzahl normalisiert, wie $getVal)
+    $getTarget = {
+        param($section, $key)
+        if ($Global:EsportGfxProfile -and $Global:EsportGfxProfile[$section] -and $null -ne $Global:EsportGfxProfile[$section][$key]) {
+            $pv = [string]$Global:EsportGfxProfile[$section][$key]
+            $pn = $null; try { $pn = [double]$pv } catch {}
+            if ($null -ne $pn) { return ([string][int][math]::Floor($pn)) }
+            return $pv
+        }
+        return $null
+    }
+    $haveIni = [bool]$content
+    $okCount = 0
+    foreach ($m in $map) {
+        $cur = & $getVal $m.Sec $m.Key
+        Set-CbByTag $m.Cb $cur
+        if (-not $m.Ind) { continue }
+        $tgt = & $getTarget $m.Sec $m.Key
+        if (-not $haveIni) {
+            $m.Ind.Text = '-'
+            $m.Ind.Foreground = $Global:SuiteColors.TextDisabled
+        } elseif ($null -eq $tgt) {
+            $m.Ind.Text = ''
+        } elseif ("$cur" -eq "$tgt") {
+            $m.Ind.Text = 'OK'
+            $m.Ind.Foreground = $Global:SuiteColors.StatusOK
+            $okCount++
+        } else {
+            $m.Ind.Text = 'BAD'
+            $m.Ind.Foreground = $Global:SuiteColors.StatusError
+            $m.Ind.ToolTip = "Competitive-Soll: $tgt"
+        }
+    }
+
+    # Globaler Match-Badge
+    if ($ctrls.lblGfxMatchBadge -and $ctrls.gfxMatchBadge) {
+        if (-not $haveIni) {
+            $ctrls.lblGfxMatchBadge.Text = 'Competitive-Match: GameUserSettings.ini fehlt'
+            $ctrls.gfxMatchBadge.Background = $Global:SuiteColors.BorderStrong
+        } else {
+            $total = $map.Count
+            $allOk = ($okCount -eq $total)
+            $ctrls.lblGfxMatchBadge.Text = "Competitive-Match: $okCount/$total"
+            $ctrls.gfxMatchBadge.Background    = if ($allOk) { $Global:SuiteColors.OkBg } else { $Global:SuiteColors.WarnBg }
+            $ctrls.lblGfxMatchBadge.Foreground = if ($allOk) { $Global:SuiteColors.StatusOK } else { $Global:SuiteColors.StatusWarn }
+        }
+    }
 }
 
 function Update-GraphicsTab {
@@ -3301,6 +3527,21 @@ function Update-GraphicsTab {
     # Revert nur moeglich, wenn ein Snapshot/Backup existiert
     $revertable = Test-TweakRevertable -Tweak $tw
     $ctrls.btnGfxRevert.IsEnabled = $revertable
+
+    # Apply-Button dynamisch: bei aktivem Profil sekundaer ("Erneut anwenden"),
+    # bei Abweichung primaer-gruen ("Competitive-Profil anwenden") - sonst ist
+    # unklar, ob der Klick noch etwas bewirkt (Bug #7).
+    if ($ctrls.btnGfxApply) {
+        if ($status -eq 'OK') {
+            $ctrls.btnGfxApply.Content    = 'Profil erneut anwenden'
+            $ctrls.btnGfxApply.Background  = $Global:SuiteColors.BorderStrong
+            $ctrls.btnGfxApply.Foreground  = $Global:SuiteColors.TextPrimary
+        } else {
+            $ctrls.btnGfxApply.Content    = 'Competitive-Profil anwenden'
+            $ctrls.btnGfxApply.Background  = $Global:SuiteColors.StatusOK
+            $ctrls.btnGfxApply.Foreground  = 'White'
+        }
+    }
 
     if ($Global:LastGfxInfo) {
         $ctrls.lblGfxInfo.Text = $Global:LastGfxInfo
@@ -3812,12 +4053,15 @@ function Start-PUBGCapture {
                 }
             } elseif ($state.Phase -eq 'analyzing') {
                 Stop-CaptureTimer
-                # CSV analysieren
+                # CSV analysieren. -not $result faengt einen unerwarteten $null-
+                # Rueckgabewert ab, damit kein null-Ergebnis als Erfolg durchrutscht.
                 $result = Analyze-CaptureCSV -CsvPath $state.OutputCsv
-                if ($result.Error) {
-                    $ctrls.lblCapPhase.Text = "Analyse-Fehler: $($result.Error)"
+                if (-not $result -or $result.Error) {
+                    $errTxt = if ($result -and $result.Error) { $result.Error } else { 'Analyse lieferte kein Ergebnis' }
+                    $ctrls.lblCapPhase.Text = "Analyse-Fehler: $errTxt"
                     $ctrls.lblCapPhase.Foreground = $Global:SuiteColors.StatusError
-                    Write-SuiteLog "Capture Analyse Fehler: $($result.Error)" 'ERROR'
+                    Show-CapResult $result   # zeigt die Fehlermeldung in 'Letzte Messung'
+                    Write-SuiteLog "Capture Analyse Fehler: $errTxt" 'ERROR'
                 } else {
                     Show-CapResult $result
                     Add-CaptureEntry $result

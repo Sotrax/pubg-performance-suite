@@ -51,17 +51,29 @@ $script:RegLogDir     = Join-Path $script:RegLocalAppData 'PUBGSuite\logs'
 $script:NpiStampPath  = Join-Path $script:RegLocalAppData 'PUBGDiag\npi-applied.stamp'
 $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 
-# NVIDIA PUBG-Profil: Profilname + die 8 Treiber-Settings. Modul-Scope, damit
+# NVIDIA PUBG-Profil: Profilname + die Treiber-Settings. Modul-Scope, damit
 # Apply (Invoke-NPIPubgProfile) und Revert (Revert-NPIPubgProfile) GENAU dieselbe
 # Liste nutzen - eine einzige Quelle fuer Setzen und Zuruecksetzen.
+#
+# Setting-IDs gegen die offizielle nvidiaProfileInspector-Referenz verifiziert
+# (nvidiaProfileInspector/CustomSettingNames.xml, Orbmu2k/nvidiaProfileInspector):
+#   0x10835002 = Frame Rate Limiter V3   (Wert = FPS als DWORD, z.B. 237 = 0xED)
+#   0x10835000 = Ultra Low Latency - Enabled  (Bool: 0=Off, 1=On)
+#   0x0005F543 = Ultra Low Latency - CPL State (0=Off,1=On,2=Ultra - NVCP-Anzeige)
+# Frueher (bis 0.25.0-beta) stand hier faelschlich 0x10835013 fuer den Limiter -
+# diese ID existiert nicht, der Treiber-FPS-Cap wurde dadurch NIE gesetzt.
+#
+# Dynamic='FpsCap': Val wird erst beim Apply aus Get-OptimalFpsCap (Monitor-Hz
+# minus 3) berechnet - eine einzige Quelle fuer den Cap-Wert, kein Hardcoding.
 $script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
 $script:NpiPubgSettings = @(
     @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
     @{ Id='0x00A879CF'; Val='0x00000000'; Desc='Vertical Sync = Force OFF' }
     @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
     @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
-    @{ Id='0x10835000'; Val='0x00000002'; Desc='Low Latency Mode = Ultra' }
-    @{ Id='0x10835013'; Val='0x000000ED'; Desc='Frame Rate Limiter v3 = 237 FPS' }
+    @{ Id='0x10835000'; Val='0x00000001'; Desc='Ultra Low Latency = Enabled' }
+    @{ Id='0x0005F543'; Val='0x00000002'; Desc='Ultra Low Latency CPL-State = Ultra (NVCP-Anzeige)' }
+    @{ Id='0x10835002'; Val=$null; Dynamic='FpsCap'; Desc='Frame Rate Limiter V3 = Monitor-Hz minus 3' }
     @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
     @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
 )
@@ -311,13 +323,28 @@ function Install-NPIFromGitHub {
     }
 }
 
+# Loest den konkreten Hex-Wert fuer ein NPI-Setting auf. Bei Dynamic='FpsCap'
+# wird der Wert aus Get-OptimalFpsCap (Monitor-Hz minus 3) berechnet und auf
+# den von Frame Rate Limiter V3 unterstuetzten Bereich (20..1000 FPS) geklemmt.
+function Resolve-NpiSettingValue {
+    param($Setting)
+    if ($Setting.Dynamic -eq 'FpsCap') {
+        $cap = [int](Get-OptimalFpsCap)
+        if ($cap -lt 20)   { $cap = 20 }
+        if ($cap -gt 1000) { $cap = 1000 }
+        return ('0x{0:X8}' -f $cap)
+    }
+    return $Setting.Val
+}
+
 function Invoke-NPIPubgProfile {
     param([string]$NpiPath)
     if (-not $NpiPath -or -not (Test-Path $NpiPath)) { return $false }
     $ok = 0; $fail = 0
     foreach ($s in $script:NpiPubgSettings) {
         try {
-            $null = & $NpiPath '-setProfileSetting' $script:NpiPubgProfileName $s.Id $s.Val 2>&1
+            $val = Resolve-NpiSettingValue -Setting $s
+            $null = & $NpiPath '-setProfileSetting' $script:NpiPubgProfileName $s.Id $val 2>&1
             if ($null -eq $LASTEXITCODE -or $LASTEXITCODE -eq 0) { $ok++ } else { $fail++ }
         } catch { $fail++ }
     }
@@ -679,30 +706,38 @@ $script:PUBGTweaks = @(
         }
     }
 
-    # ---- PUBG: FPS-Cap --------------------------------------------------------
+    # ---- PUBG: In-Game FPS-Cap ------------------------------------------------
+    # Menuekonform: PUBGs In-Game-FPS-Cap kennt nur "Unlimited" und "Display
+    # Based". "Display Based" = FrameRateLimit auf die Monitor-Hz. Ein krummer
+    # Wert wie 237 ist ueber das Spiel-Menue NICHT erzeugbar und wuerde von PUBG
+    # beim Start zurueckgesetzt - der eigentliche Competitive-Cap (Hz minus 3)
+    # laeuft daher ueber den NVIDIA Frame Rate Limiter (Tweak 'nvprofile').
+    # FrameRateLimit liegt in der Sektion [/Script/TslGame.TslGameUserSettings]
+    # (gegen reale GameUserSettings.ini verifiziert).
     [PSCustomObject]@{
-        Id='fpscap'; Category='PUBG'; Label='PUBG FPS-Cap = Monitor-Hz minus 3'
-        Description='Auto-Cap basierend auf Monitor-Hz fuer das G-Sync/Reflex-Window'
+        Id='fpscap'; Category='PUBG'; Label='PUBG In-Game FPS-Cap = Display-Based (Monitor-Hz)'
+        Description='Setzt PUBGs In-Game-FPS-Cap menuekonform auf "Display Based". Der scharfe Competitive-Cap (Hz minus 3) kommt vom NVIDIA-Treiber-Limiter.'
         Impact='KEIN'; ImpactDetail=''; RequiresAdmin=$false
         Changes=@(
             'Datei: %LOCALAPPDATA%\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini',
             'Backup vor Aenderung als .bak_<timestamp>',
-            'Cap dynamisch berechnet: aktuelle Primary-Monitor-Hz minus 3',
-            'Beispiele: 240Hz -> 237, 165Hz -> 162, 144Hz -> 141, 360Hz -> 357'
+            'FrameRateLimit in [/Script/TslGame.TslGameUserSettings] = aktuelle Primary-Monitor-Hz',
+            'Menuekonform: entspricht der In-Game-Einstellung "FPS-Cap: Display Based"',
+            'PUBG muss beim Anwenden geschlossen sein (sonst Overwrite beim Beenden)'
         )
         Check={
             $gus = Get-PUBGGameUserPath
             if (-not (Test-Path $gus)) {
                 return @{ Status='SKIP'; CurrentValue='GameUserSettings.ini nicht gefunden'; Detail='PUBG mind. einmal starten/beenden' }
             }
-            $target = Get-OptimalFpsCap
+            $hz = Get-PrimaryMonitorHz
             $c = Get-Content $gus -Raw
-            if ($c -match '(?m)^FrameRateLimit=([\d.]+)') {
+            if ($c -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)') {
                 $v = [int][math]::Floor([double]$matches[1])
-                if ($v -eq $target) { @{ Status='OK'; CurrentValue="$v FPS"; Detail='' } }
-                else { @{ Status='TWEAK'; CurrentValue="$v FPS"; Detail="FPS-Cap auf $target setzen (Monitor-Hz minus 3)" } }
+                if ($v -eq $hz) { @{ Status='OK'; CurrentValue="$v FPS (Display-Based)"; Detail='' } }
+                else { @{ Status='TWEAK'; CurrentValue="$v FPS"; Detail="In-Game-Cap auf Display-Based ($hz) setzen" } }
             } else {
-                @{ Status='TWEAK'; CurrentValue='kein Cap gesetzt'; Detail="FPS-Cap auf $target setzen (Monitor-Hz minus 3)" }
+                @{ Status='TWEAK'; CurrentValue='kein Cap gesetzt'; Detail="In-Game-Cap auf Display-Based ($hz) setzen" }
             }
         }
         Apply={
@@ -711,18 +746,23 @@ $script:PUBGTweaks = @(
                 if (-not (Test-Path $gus)) {
                     return @{ Success=$false; Message='GameUserSettings.ini nicht gefunden'; Snapshot=$null }
                 }
+                # PUBG darf nicht laufen - es ueberschreibt GameUserSettings.ini beim Beenden.
+                if (@(Get-Process -Name 'TslGame' -ErrorAction SilentlyContinue).Count -gt 0) {
+                    return @{ Success=$false; Message='PUBG laeuft - bitte erst komplett beenden, dann Apply'; Snapshot=$null }
+                }
                 $bak  = Copy-FileToBackup -SourcePath $gus
                 $snap = @{ BackupPath = $bak; OriginalPath = $gus }
-                $target = Get-OptimalFpsCap
-                $c = Get-Content $gus -Raw
-                $newVal = "$target.000000"
-                if ($c -match '(?m)^FrameRateLimit=') {
-                    $c = $c -replace '(?m)^FrameRateLimit=[^\r\n]+',"FrameRateLimit=$newVal"
-                } else {
-                    $c += "`r`nFrameRateLimit=$newVal`r`n"
+                $hz = Get-PrimaryMonitorHz
+                if (-not (Update-IniValue -Path $gus -Section '/Script/TslGame.TslGameUserSettings' -Key 'FrameRateLimit' -Value ('{0}.000000' -f $hz))) {
+                    return @{ Success=$false; Message='Schreiben von FrameRateLimit fehlgeschlagen'; Snapshot=$snap }
                 }
-                Set-Content $gus -Value $c -NoNewline -ErrorAction Stop
-                @{ Success=$true; Message="FPS-Cap auf $target gesetzt"; Snapshot=$snap }
+                # Post-Apply-Verifikation: Wert zuruecklesen
+                $verify = Get-Content $gus -Raw -ErrorAction SilentlyContinue
+                if ($verify -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)' -and [int][math]::Floor([double]$matches[1]) -eq $hz) {
+                    @{ Success=$true; Message="In-Game-FPS-Cap auf Display-Based ($hz) gesetzt - scharfer Cap via NVIDIA-Profil"; Snapshot=$snap }
+                } else {
+                    @{ Success=$false; Message='FrameRateLimit nach Apply nicht verifizierbar'; Snapshot=$snap }
+                }
             } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
         }
         Revert={
@@ -1064,8 +1104,8 @@ $script:PUBGTweaks = @(
 
     # ---- GPU: NVIDIA PUBG-Profil ---------------------------------------------
     [PSCustomObject]@{
-        Id='nvprofile'; Category='GPU'; Label='NVIDIA PUBG-Profil (Low Latency, Power Max, etc.)'
-        Description='Setzt 8 NV-Treiber-Werte fuer das PUBG-Profil via NVIDIA Profile Inspector'
+        Id='nvprofile'; Category='GPU'; Label='NVIDIA PUBG-Profil (Low Latency, Power Max, FPS-Cap)'
+        Description='Setzt das PUBG-Treiberprofil via NVIDIA Profile Inspector - inkl. FPS-Cap auf Monitor-Hz minus 3 (Frame Rate Limiter V3)'
         Impact='KEIN'; ImpactDetail='NPI wird bei Bedarf automatisch installiert'
         RequiresAdmin=$false
         Changes=@(
@@ -1075,10 +1115,10 @@ $script:PUBGTweaks = @(
             'Vertical Sync = Force OFF',
             'Texture Filtering Quality = High Performance',
             'Threaded Optimization = ON',
-            'Low Latency Mode = Ultra (Reflex-equivalent)',
-            'Frame Rate Limiter v3 = 237 FPS',
+            'Ultra Low Latency = Enabled (Reflex-equivalent)',
+            'Frame Rate Limiter V3 = Monitor-Hz minus 3 (dynamisch, der eigentliche Competitive-FPS-Cap)',
             'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp',
-            'Revert: entfernt die 8 Profil-Werte wieder (NPI -deleteProfileSetting -> Treiber-Default)'
+            'Revert: entfernt die Profil-Werte wieder (NPI -deleteProfileSetting -> Treiber-Default)'
         )
         Check={
             if (Test-Path $script:NpiStampPath) {
@@ -1112,14 +1152,14 @@ $script:PUBGTweaks = @(
         }
         Revert={
             param($Snapshot)
-            # Entfernt die 8 gesetzten Profil-Settings -> Profil erbt wieder die
+            # Entfernt die gesetzten Profil-Settings -> Profil erbt wieder die
             # globalen Treiber-Defaults. Braucht NPI; ohne NPI -> manueller Hinweis.
             $npi = Get-NPIPath
             if (-not $npi) {
-                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - die 8 Profil-Werte manuell via NVIDIA-Systemsteuerung "Wiederherstellen" zuruecksetzen' }
+                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - die Profil-Werte manuell via NVIDIA-Systemsteuerung "Wiederherstellen" zuruecksetzen' }
             }
             if (Revert-NPIPubgProfile -NpiPath $npi) {
-                @{ Success=$true; Message='NVIDIA PUBG-Profil zurueckgesetzt (8 Werte auf Treiber-Default)' }
+                @{ Success=$true; Message="NVIDIA PUBG-Profil zurueckgesetzt ($($script:NpiPubgSettings.Count) Werte auf Treiber-Default)" }
             } else {
                 @{ Success=$false; Message='NPI-Revert teilweise fehlgeschlagen - ggf. via NVIDIA-Systemsteuerung "Wiederherstellen"' }
             }
