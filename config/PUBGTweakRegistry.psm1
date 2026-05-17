@@ -514,16 +514,64 @@ function Install-NPIFromGitHub {
 # Treiber stehen - kein falscher "angewandt"-Stamp wie in <=0.27.
 # ===========================================================================
 
-# Hex-String ('0x10835002' / '0xED') -> dezimaler uint (.nip nutzt Dezimalwerte).
-# Leerer/unguelitger Input wird mit KLARER Meldung abgewiesen - sonst wirft
-# [Convert]::ToUInt32 nur das kryptische "keine bekannten Ziffern gefunden".
+# NPI-SettingValues/-IDs format-unabhaengig nach uint32 parsen.
+# NPI v2.x exportiert .nip-Werte DEZIMAL  (<SettingValue>1</SettingValue>),
+# NPI v3.x haeufig als HEX-String         (<SettingValue>0x00000001</SettingValue>).
+# Diese Funktion akzeptiert beides - plus Gross-'X' ('0X1'), reine Hex-Strings
+# mit Buchstaben und leere/$null-Werte (-> $Default). Garbage wird GELOGGT, nicht
+# geworfen: ein einzelner kaputter Wert aus einer fremden .nip darf den
+# Read-Modify-Write-Zyklus nicht abbrechen. Fuer die hartkodierten Profil-IDs
+# gilt ConvertFrom-NpiHex (wirft - dort waere Garbage ein Programmierfehler).
+function ConvertTo-UInt32Smart {
+    param(
+        [AllowEmptyString()]
+        [AllowNull()]
+        $Value,
+        [uint32]$Default = 0
+    )
+    if ($null -eq $Value) { return $Default }
+    $s = "$Value".Trim()
+    if ([string]::IsNullOrWhiteSpace($s)) { return $Default }
+    try {
+        if ($s -match '^0[xX][0-9A-Fa-f]+$') {
+            return [Convert]::ToUInt32($s.Substring(2), 16)
+        }
+        elseif ($s -match '^-?[0-9]+$') {
+            $i64 = [int64]$s
+            if ($i64 -lt 0)                  { return [uint32]($i64 -band 4294967295L) }
+            if ($i64 -gt [uint32]::MaxValue) { return [uint32]::MaxValue }
+            return [uint32]$i64
+        }
+        elseif ($s -match '^[0-9A-Fa-f]+$') {
+            # reiner Hex-String ohne 0x-Prefix (enthaelt zwingend A-F, sonst
+            # haette der Dezimal-Zweig oben schon gegriffen)
+            return [Convert]::ToUInt32($s, 16)
+        }
+        else {
+            Write-RegLog "ConvertTo-UInt32Smart: unbekanntes Format '$s' - Default $Default" 'WARN'
+            return $Default
+        }
+    }
+    catch {
+        Write-RegLog "ConvertTo-UInt32Smart: Parse-Fehler '$s' - $($_.Exception.Message)" 'WARN'
+        return $Default
+    }
+}
+
+# Hex-/Dezimal-String ('0x10835002' / '0xED' / '237') -> dezimaler uint.
+# Fuer die HARTKODIERTEN Profil-IDs/-Werte gedacht: leerer/kaputter Input ist
+# hier ein Programmierfehler und wird mit KLARER Meldung geworfen (nicht still
+# auf 0 defaulten). Gross-'X' wird - anders als frueher - mit akzeptiert.
 function ConvertFrom-NpiHex {
     param([string]$Hex)
-    $clean = ($Hex -replace '^0x','').Trim()
-    if ([string]::IsNullOrWhiteSpace($clean)) {
-        throw "ConvertFrom-NpiHex: leerer/ungueltiger Hex-Wert '$Hex'"
+    $s = "$Hex".Trim()
+    if ([string]::IsNullOrWhiteSpace($s)) {
+        throw "ConvertFrom-NpiHex: leerer/ungueltiger Wert '$Hex'"
     }
-    return [Convert]::ToUInt32($clean, 16)
+    if ($s -notmatch '^(0[xX])?[0-9A-Fa-f]+$') {
+        throw "ConvertFrom-NpiHex: unparsebarer Hex-Wert '$Hex'"
+    }
+    return [Convert]::ToUInt32(($s -replace '^0[xX]',''), 16)
 }
 
 # Laedt eine XML-Datei encoding-robust in ein XmlDocument. NPI >=3.x exportiert
@@ -629,7 +677,11 @@ function Read-NipProfiles {
         if ($p.Settings -and $p.Settings.ProfileSetting) {
             foreach ($s in @($p.Settings.ProfileSetting)) {
                 if ($null -eq $s.SettingID) { continue }
-                $sid = [string]$s.SettingID
+                # SettingID format-unabhaengig auf Dezimal-String normalisieren:
+                # NPI v3.x schreibt IDs haeufig als Hex (0x10835000), v2.x dezimal.
+                # Ohne Normalisierung schlagen alle Settings-Lookups (ContainsKey)
+                # fehl, weil der Schluessel mal hex, mal dezimal vorliegt.
+                $sid = [string](ConvertTo-UInt32Smart -Value ([string]$s.SettingID))
                 $stype = if ($s.ValueType) { [string]$s.ValueType } else { 'Dword' }
                 $sname = if ($s.SettingNameInfo) { [string]$s.SettingNameInfo } else { '' }
                 $settings[$sid] = @{ Value=[string]$s.SettingValue; Type=$stype; Name=$sname }
@@ -697,10 +749,17 @@ function Test-NpiChangesApplied {
         if ($ch.Set) {
             foreach ($hid in $ch.Set.Keys) {
                 $idDec = [string](ConvertFrom-NpiHex $hid)
-                $want  = [string](ConvertFrom-NpiHex $ch.Set[$hid])
-                $got   = if ($prof -and $prof.Settings.ContainsKey($idDec)) { [string]$prof.Settings[$idDec].Value } else { $null }
+                $want  = [uint32](ConvertFrom-NpiHex $ch.Set[$hid])
+                # Soll/Ist als uint32 vergleichen, NICHT als String: der .nip-Wert
+                # kommt je nach NPI-Version dezimal ('1') oder hex ('0x00000001').
+                # Ein String-Vergleich meldete sonst faelschlich "nicht angewandt".
+                if (-not ($prof -and $prof.Settings.ContainsKey($idDec))) {
+                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: nicht im Profil gefunden" }
+                }
+                $rawGot = [string]$prof.Settings[$idDec].Value
+                $got    = ConvertTo-UInt32Smart -Value $rawGot
                 if ($got -ne $want) {
-                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: erwartet $want, gelesen '$got'" }
+                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: erwartet $want, gelesen '$rawGot' (=$got)" }
                 }
             }
         }
