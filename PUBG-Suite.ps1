@@ -390,8 +390,10 @@ function Get-LiveStatus {
     # nicht pruefen - daher der OSD-Hinweis im Settings-Tab.
     $nvSt = $null
     try { $nvSt = Get-NPIPresetStatus } catch {}
+    $nvExe = 'TslGame.exe'
+    try { $m = Get-NPIProfileMeta; if ($m -and $m.Executable) { $nvExe = $m.Executable } } catch {}
     if ($nvSt -and $nvSt.Applied) {
-        $s['NV Profil'] = @{ Value="$($nvSt.Label) (vor $($nvSt.AgeDays)d)"; Status='OK' }
+        $s['NV Profil'] = @{ Value="$($nvSt.Label) - App-Profil $nvExe (vor $($nvSt.AgeDays)d)"; Status='OK' }
     } else {
         $s['NV Profil'] = @{ Value='kein Preset angewandt'; Status='WARN' }
     }
@@ -758,24 +760,17 @@ function Invoke-EsportGfxApply {
                 $null = Update-IniValue -Path $gus -Section $resSection -Key "LastUserConfirmedResolutionSize$axis" -Value $matches[1]
             }
         }
-        # FPS-Cap menuekonform setzen = In-Game "Display Based" (FrameRateLimit auf
-        # die Monitor-Hz). FrameRateLimit liegt in [/Script/TslGame.TslGameUserSettings].
-        # Ein krummer Wert wie 237 ist ueber das Spiel-Menue NICHT erzeugbar und wird
-        # von PUBG beim Start zurueckgesetzt - der scharfe Competitive-Cap (Hz minus 3)
-        # laeuft daher ueber den NVIDIA Frame Rate Limiter (Tweak 'nvprofile').
-        $capHz = Get-PrimaryMonitorHz
-        $capWritten = Update-IniValue -Path $gus -Section $resSection -Key 'FrameRateLimit' -Value ('{0}.000000' -f $capHz)
-        # Post-Apply-Verifikation: FrameRateLimit zuruecklesen
-        $vNow = Get-Content $gus -Raw -ErrorAction SilentlyContinue
-        $capOk = $capWritten -and ($vNow -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)') `
-                 -and ([int][math]::Floor([double]$matches[1]) -eq $capHz)
-        $capMsg = if ($capOk) {
-            "FPS-Cap: In-Game Display-Based ($capHz) - scharfer Cap $($capHz - 3) via NVIDIA-Profil (Tweak 'nvprofile' anwenden)"
-        } else {
-            'WARN: FrameRateLimit (FPS-Cap) konnte nicht verifiziert werden'
-        }
-        Write-SuiteLog "esportgfx: Competitive-Grafik-Profil + LastUserConfirmed + FrameRateLimit geschrieben - $capMsg" 'INFO'
-        return @{ Success=$true; Message="Competitive-Grafik-Profil angewendet. $capMsg"; Snapshot=$snap }
+        # FPS-Cap wird hier BEWUSST NICHT geschrieben. Der dedizierte Tweak
+        # 'fpscap' ist die alleinige Quelle fuer FrameRateLimit - er rechnet
+        # Monitor-Hz minus Offset und schreibt FrameRateLimit +
+        # InGameCustomFrameRateLimit + InGameFrameRateLimitType konsistent.
+        # Frueher setzte esportgfx hier zusaetzlich FrameRateLimit auf die
+        # Monitor-Hz; das kollidierte mit 'fpscap' - je nach Apply-Reihenfolge
+        # gewann ein anderer Wert. Single Source of Truth = 'fpscap'.
+        Write-SuiteLog 'esportgfx: Competitive-Grafik-Profil + LastUserConfirmed geschrieben (FPS-Cap separat ueber Tweak fpscap)' 'INFO'
+        return @{ Success=$true
+                  Message="Competitive-Grafik-Profil angewendet. FPS-Cap separat ueber den Tweak 'fpscap' setzen."
+                  Snapshot=$snap }
     } catch {
         Write-SuiteLog "esportgfx Apply Exception: $($_.Exception.Message)" 'ERROR'
         return @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null }
@@ -1811,6 +1806,7 @@ $xamlTemplate = @'
                                     <StackPanel>
                                         <TextBlock Text="Status" Foreground="@@TextSecondary@@" FontSize="10" FontWeight="SemiBold"/>
                                         <TextBlock x:Name="lblNvPresetStatus" Text="..." FontSize="13" FontWeight="Bold" Margin="0,2,0,0"/>
+                                        <TextBlock x:Name="lblNvAppProfile" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
                                 <TextBlock Text="Preset waehlen" Foreground="@@TextPrimary@@" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
@@ -2036,7 +2032,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
     'cmbFullscreen','cmbAA','cmbTexture','cmbViewDist','cmbShadow','cmbPost','cmbEffects','cmbFoliage','btnGfxApplyCustom','lblGfxCustomInfo',
     'lblIndFullscreen','lblIndAA','lblIndTexture','lblIndViewDist','lblIndShadow','lblIndPost','lblIndEffects','lblIndFoliage','lblGfxMatchBadge','gfxMatchBadge',
-    'cmbNvPreset','btnNvPresetApply','lblNvPresetStatus','lblNvPresetSummary','lblNvPresetInfo',
+    'cmbNvPreset','btnNvPresetApply','lblNvPresetStatus','lblNvPresetSummary','lblNvPresetInfo','lblNvAppProfile',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'btnRefreshBackups','lblBackupInfo','backupList',
@@ -3728,6 +3724,20 @@ function Update-NvPresetCard {
     } else {
         $ctrls.lblNvPresetStatus.Text = '[--]  kein NVIDIA-Preset angewandt'
         $ctrls.lblNvPresetStatus.Foreground = $Global:SuiteColors.StatusWarn
+    }
+    # Sichtbar machen, auf WELCHES Profil die Settings gehen: das PUBG-App-Profil
+    # (tslgame.exe), nicht das globale Treiberprofil. Speist sich aus der
+    # geladenen PUBGNvidiaProfile.psd1.
+    if ($ctrls.lblNvAppProfile) {
+        $meta = $null
+        try { $meta = Get-NPIProfileMeta } catch {}
+        if ($meta -and $meta.Loaded) {
+            $ctrls.lblNvAppProfile.Text = "App-Profil: $($meta.ProfileName) ($($meta.Executable)) - Profil-Datei v$($meta.Version). Settings landen im App-Profil, nicht im globalen Treiberprofil."
+            $ctrls.lblNvAppProfile.Foreground = $Global:SuiteColors.TextSecondary
+        } else {
+            $ctrls.lblNvAppProfile.Text = 'NVIDIA-Profil-Datei nicht geladen - config\PUBGNvidiaProfile.psd1 fehlt oder ist fehlerhaft.'
+            $ctrls.lblNvAppProfile.Foreground = $Global:SuiteColors.StatusError
+        }
     }
     # Vorauswahl: angewandtes Preset, sonst Default 'blurbusters' (nur initial,
     # eine bestehende Nutzer-Auswahl wird nicht ueberschrieben).

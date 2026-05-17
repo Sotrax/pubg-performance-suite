@@ -51,93 +51,76 @@ $script:RegLogDir     = Join-Path $script:RegLocalAppData 'PUBGSuite\logs'
 $script:NpiPresetStamp = Join-Path $script:RegLocalAppData 'PUBGDiag\nvpreset.stamp'
 $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 
-# NVIDIA PUBG-Profil: Profilname + die Treiber-Settings. Modul-Scope, damit
-# Apply (Invoke-NPIPubgProfile) und Revert (Revert-NPIPubgProfile) GENAU dieselbe
-# Liste nutzen - eine einzige Quelle fuer Setzen und Zuruecksetzen.
-#
-# Setting-IDs + Werte am 2026-05-17 gegen die NVPI-Quelle verifiziert:
-#   - predefined IDs: NvApiDriverSettings.cs (Orbmu2k/nvidiaProfileInspector)
-#   - Wert-Enums:     CustomSettingNames.xml (dieselbe Quelle)
-# Jede ID + jeder Wert unten ist dort 1:1 belegt.
-#
-# ACHTUNG - bis einschliesslich 0.28.0-beta waren hier 4 von 7 IDs FALSCH
-# verdrahtet (der alte Kommentar behauptete faelschlich "verifiziert"):
-#   0x1033DCD2 war in Wahrheit SLI_PREDEFINED_GPU_COUNT (nicht Power Mgmt)
-#   0x00CE0E32 existiert im Treiber GAR NICHT (frei erfundene ID)
-#   0x20FF7493 war OGL_EXTENSION_STRING_VERSION (nicht Threaded Optimization)
-#   0x00D55F7D war Antialiasing-Compatibility-DX9 (nicht AA-Mode)
-# Folge: Power/Texture/Threaded wurden nie gesetzt, und 0x00CE0E32 liess sogar
-# die Post-Import-Verifikation fehlschlagen. Ab 0.29.0-beta korrigiert.
-#
-# NpiPubgSettings = der PRESET-UNABHAENGIGE Basis-Block des PUBG-Treiberprofils.
-# Diese Werte sind in BEIDEN Presets identisch. Was die Presets unterscheidet
-# (Vertical Sync + G-Sync), steht in $script:NpiPresets weiter unten - NICHT
-# hier. Ultra Low Latency bleibt in beiden Presets Off: PUBG hat kein NVIDIA
-# Reflex, und der einzige Treiber-Auto-Cap (Low Latency Mode = Ultra) ist laut
-# Blur Busters dem manuellen fpscap-Cap unterlegen.
-$script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
-$script:NpiPubgSettings = @(
-    @{ Id='0x1057EB71'; Val='0x00000001'; Desc='Power Management Mode = Prefer maximum performance' }
-    @{ Id='0x00CE2691'; Val='0x00000014'; Desc='Texture Filtering - Quality = High performance' }
-    @{ Id='0x0019BB68'; Val='0x00000001'; Desc='Texture Filtering - Negative LOD Bias = Clamp' }
-    @{ Id='0x20C1221E'; Val='0x00000001'; Desc='Threaded Optimization = On' }
-    @{ Id='0x10835000'; Val='0x00000000'; Desc='Ultra Low Latency = Off (manueller fpscap-Cap ist wirksamer als der ULL-Ultra-Auto-Cap)' }
-    @{ Id='0x00AC8497'; Val='0x00002800'; Desc='Shader Cache Size = 10 GB (gegen Shader-Compile-Stutter / Frametime-Spikes)' }
-    @{ Id='0x0064B541'; Val='0x00000001'; Desc='Preferred Refresh Rate = Highest available' }
-)
-
-# G-Sync-Settings. IDs + Werte gegen die nvidiaProfileInspector-
-# Referenz (CustomSettingNames.xml) verifiziert:
-#   0x1094F157 GSYNC Global Feature    (0=Off, 1=On)
-#   0x1094F1F7 GSYNC Global Mode       (0=Off, 1=Fullscreen only, 2=FS+Windowed)
-#   0x1194F158 GSYNC Application Mode  (0=Off, 1=Fullscreen only, 2=FS+Windowed)
-#   0x10A879CF GSYNC Application State (0=Allow, 1=Force Off, 2=Disallow)
-# PUBG laeuft im Exklusiv-Vollbild -> 'Fullscreen only' genuegt und ist die
-# latenzaermste Wahl.
-#  - Base-Settings gehen ins globale Treiberprofil ('Base Profile') = der
-#    Master-G-Sync-Schalter der NVIDIA-Systemsteuerung.
-#  - App-Settings gehen ins PUBG-Profil.
-# Greift nur, wenn im Monitor-OSD VRR/Adaptive-Sync aktiv ist.
-$script:NpiGSyncBaseSettings = @(
-    @{ Id='0x1094F157'; Val='0x00000001'; Desc='G-SYNC Global Feature = On' }
-    @{ Id='0x1094F1F7'; Val='0x00000001'; Desc='G-SYNC Global Mode = Fullscreen only' }
-)
-$script:NpiGSyncAppSettings = @(
-    @{ Id='0x1194F158'; Val='0x00000001'; Desc='G-SYNC Application Mode = Fullscreen only' }
-    @{ Id='0x10A879CF'; Val='0x00000000'; Desc='G-SYNC Application State = Allow' }
-)
-$script:NpiBaseProfileName = 'Base Profile'   # globales Treiberprofil in der .nip
+# NPI wird auf eine GEPINNTE Version festgenagelt. Der Maintainer markiert die
+# v3.x-Serie durchgaengig als Pre-Release; v3.x exportiert .nip ausserdem im
+# geaenderten Hex-Format, das hier wiederholt Apply-Fehler ausgeloest hat.
+# 2.4.0.31 ist das aktuelle Latest-Stable (kein Pre-Release). GitHub-Tag OHNE
+# 'v'-Prefix - die v3.x-Tags haben eines, die 2.4er nicht.
+$script:NpiPinnedVersion = '2.4.0.31'
 
 # ---------------------------------------------------------------------------
-#  NVIDIA-PRESETS - zwei validierte, in sich kohaerente Competitive-Setups
+#  NVIDIA-Treiberprofil - geladen aus config\PUBGNvidiaProfile.psd1
 # ---------------------------------------------------------------------------
-# Jedes Preset = Basis-Block ($NpiPubgSettings) + ein Sync-Block. Der Sync-Block
-# ist der EINZIGE Unterschied zwischen den Presets:
+# Die Treiber-Settings + Presets standen bis 0.31.0-beta hartkodiert hier. Ab
+# 0.32.0-beta sind sie in PUBGNvidiaProfile.psd1 ausgelagert (Single Source of
+# Truth) und werden via Import-PowerShellDataFile geladen - datensicher, fuehrt
+# keinen Code aus. Die $script:-Variablennamen bleiben identisch; der restliche
+# Modulcode (Invoke-NPIPreset/Revert-NPIPreset) arbeitet unveraendert damit.
 #
-#  blurbusters  - Blur-Busters-G-SYNC-101-Schule: G-Sync an + Vertical Sync
-#                 (NVCP) 'Force On' als Tearing-Backstop. Tearing-frei.
-#                 PFLICHT-Begleiter: der fpscap-Tweak (Refresh-3) - nur ein Cap
-#                 unter der Refreshrate haelt den V-Sync-Backstop latenzfrei.
-#                 Ohne Cap greift V-Sync REAL = volle V-Sync-Latenz.
-#  competitive  - Pro-Schule: G-Sync UND V-Sync komplett aus. Niedrigste
-#                 Input-Latenz, dafuer etwas Tearing. FPS uncapped oder Cap bei
-#                 ~80 % der stabil erreichbaren FPS.
-#
-# Vertical-Sync-Werte (Setting 0x00A879CF, gegen CustomSettingNames.xml geprueft):
-#   0x47814940 = Force on    0x08416747 = Force off
-$script:NpiVSyncId = '0x00A879CF'
-$script:NpiPresets = [ordered]@{
-    blurbusters = @{
-        Label   = 'Blur Busters - G-Sync + V-Sync (tearing-frei)'
-        Summary = 'G-Sync an, Vertical Sync (NVCP) = Force On als Tearing-Backstop. Tearing-frei bei minimaler Latenz INNERHALB des VRR-Fensters. WICHTIG: zusaetzlich den Tweak "fpscap" anwenden (Refresh-3) - der ist hier Pflicht, sonst greift V-Sync real.'
-        VSync   = '0x47814940'   # Force on
-        GSync   = $true
+# Die SettingIDs in der psd1 sind die im Repo verifizierten IDs (0.29.0-beta,
+# gegen NvApiDriverSettings.cs + CustomSettingNames.xml geprueft) - siehe den
+# Warnhinweis im Kopf der psd1.
+$script:NpiProfilePath = Join-Path $PSScriptRoot 'PUBGNvidiaProfile.psd1'
+$script:NpiProfileMeta = @{ Version = '?'; Path = $script:NpiProfilePath; Loaded = $false; LoadLog = $null }
+
+# Sichere Defaults, falls die psd1 fehlt/kaputt ist: die NVIDIA-Funktionen
+# melden dann sauber "Profil nicht geladen", statt das Modul-Laden zu sprengen.
+$script:NpiPubgProfileName   = "PLAYERUNKNOWN'S BATTLEGROUNDS"
+$script:NpiPubgExecutable    = 'TslGame.exe'
+$script:NpiBaseProfileName   = 'Base Profile'
+$script:NpiVSyncId           = '0x00A879CF'
+$script:NpiPubgSettings      = @()
+$script:NpiGSyncBaseSettings = @()
+$script:NpiGSyncAppSettings  = @()
+$script:NpiPresets           = [ordered]@{}
+
+try {
+    if (-not (Test-Path $script:NpiProfilePath)) {
+        throw "NVIDIA-Profil-Datei nicht gefunden: $script:NpiProfilePath"
     }
-    competitive = @{
-        Label   = 'Real Competitive - G-Sync aus (max. latenzfrei)'
-        Summary = 'G-Sync und V-Sync komplett aus. Absolut niedrigste Input-Latenz, dafuer sichtbares Tearing. Passend, wenn die FPS dauerhaft deutlich ueber der Monitor-Hz liegen. FPS-Cap: uncapped oder ~80 % der stabilen FPS.'
-        VSync   = '0x08416747'   # Force off
-        GSync   = $false
+    $npiData = Import-PowerShellDataFile -Path $script:NpiProfilePath -ErrorAction Stop
+
+    if ($npiData.ProfileName)     { $script:NpiPubgProfileName  = [string]$npiData.ProfileName }
+    if ($npiData.Executable)      { $script:NpiPubgExecutable   = [string]$npiData.Executable }
+    if ($npiData.BaseProfileName) { $script:NpiBaseProfileName  = [string]$npiData.BaseProfileName }
+    if ($npiData.VSyncId)         { $script:NpiVSyncId          = [string]$npiData.VSyncId }
+    if ($npiData.PubgSettings)      { $script:NpiPubgSettings      = @($npiData.PubgSettings) }
+    if ($npiData.GSyncBaseSettings) { $script:NpiGSyncBaseSettings = @($npiData.GSyncBaseSettings) }
+    if ($npiData.GSyncAppSettings)  { $script:NpiGSyncAppSettings  = @($npiData.GSyncAppSettings) }
+
+    # Presets: die psd1 liefert eine geordnete Liste (Array) - Import-Power-
+    # ShellDataFile kennt kein [ordered]. Daraus die vom uebrigen Code erwartete
+    # [ordered]-Hashtable Key -> @{ Label; Summary; VSync; GSync } aufbauen.
+    foreach ($p in @($npiData.Presets)) {
+        if (-not $p -or -not $p.Key) { continue }
+        $script:NpiPresets[[string]$p.Key] = @{
+            Label   = [string]$p.Label
+            Summary = [string]$p.Summary
+            VSync   = [string]$p.VSync
+            GSync   = [bool]$p.GSync
+        }
+    }
+
+    $script:NpiProfileMeta.Version = "$($npiData.ProfileVersion)"
+    $script:NpiProfileMeta.Loaded  = $true
+    $script:NpiProfileMeta.LoadLog = @{
+        Level   = 'INFO'
+        Message = "NVIDIA-Profil geladen: v$($npiData.ProfileVersion), $($script:NpiPubgSettings.Count) Basis-Settings, $($script:NpiPresets.Count) Presets"
+    }
+} catch {
+    $script:NpiProfileMeta.LoadLog = @{
+        Level   = 'ERROR'
+        Message = "FEHLER beim Laden des NVIDIA-Profils: $($_.Exception.Message)"
     }
 }
 
@@ -155,6 +138,12 @@ function Write-RegLog {
         "[$(Get-Date -Format 'HH:mm:ss.fff')] [$Level] [Registry] $Message" |
             Add-Content -Path $logFile -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {}
+}
+
+# NVIDIA-Profil-Ladestatus protokollieren - das Laden lief oben am Modul-Anfang
+# (vor der Write-RegLog-Definition), die Meldung wird hier nachgereicht.
+if ($script:NpiProfileMeta.LoadLog) {
+    Write-RegLog $script:NpiProfileMeta.LoadLog.Message $script:NpiProfileMeta.LoadLog.Level
 }
 
 function Get-RegistrySnapshot {
@@ -446,21 +435,22 @@ function Get-NPIPath {
 function Install-NPIFromGitHub {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Write-RegLog 'NPI-Install: hole Release-Liste von GitHub...'
-        # /releases/latest taugt nicht: der Maintainer markiert neuere Versionen
-        # nicht zuverlaessig als "latest" (dort ist eine aeltere 2.4er gepinnt,
-        # obwohl 3.x existiert). Daher alle Releases holen und die hoechste
-        # Versionsnummer mit ZIP-Asset waehlen.
-        $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases?per_page=30' `
-            -Headers @{ 'User-Agent' = 'PUBG-Suite' } -ErrorAction Stop
-        $release = $releases |
-            Where-Object { -not $_.draft -and ($_.assets | Where-Object { $_.name -match '\.zip$' }) } |
-            Sort-Object { try { [version]([string]$_.tag_name -replace '^[vV]','') } catch { [version]'0.0' } } -Descending |
-            Select-Object -First 1
-        if (-not $release) { throw 'Kein passendes NPI-Release mit ZIP-Asset gefunden' }
-        $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
-        if (-not $zipAsset) { throw 'Kein ZIP-Asset im NPI-Release gefunden' }
-        Write-RegLog "NPI-Install: neuestes Release = $($release.tag_name)"
+        $tag = $script:NpiPinnedVersion
+        Write-RegLog "NPI-Install: gepinnte Version $tag wird geholt..."
+        # Frueher wurden ALLE Releases geholt und die hoechste Versionsnummer
+        # gewaehlt - das zog die v3.x-Pre-Releases (geaendertes .nip-Format).
+        # Jetzt gezielt das Release des gepinnten Tags ($NpiPinnedVersion).
+        # Schlaegt die API fehl (Rate-Limit o.ae.), wird auf die direkte
+        # Download-URL des unveraenderlichen Release-Assets zurueckgefallen.
+        $zipUrl = "https://github.com/Orbmu2k/nvidiaProfileInspector/releases/download/$tag/nvidiaProfileInspector.zip"
+        try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/tags/$tag" `
+                -Headers @{ 'User-Agent' = 'PUBG-Suite' } -ErrorAction Stop
+            $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
+            if ($zipAsset) { $zipUrl = $zipAsset.browser_download_url }
+        } catch {
+            Write-RegLog "NPI-Install: GitHub-API nicht erreichbar ($($_.Exception.Message)) - nutze direkte Download-URL" 'WARN'
+        }
 
         $target = $script:NpiDefaultDir
         try {
@@ -469,9 +459,9 @@ function Install-NPIFromGitHub {
             $target = Join-Path $env:USERPROFILE 'Tools\nvidiaProfileInspector'
             if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
         }
-        $zipPath = Join-Path $env:TEMP "npi_$($release.tag_name)_$(Get-Random).zip"
+        $zipPath = Join-Path $env:TEMP "npi_${tag}_$(Get-Random).zip"
         try {
-            Invoke-WebRequest -Uri $zipAsset.browser_download_url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
             Expand-Archive -Path $zipPath -DestinationPath $target -Force -ErrorAction Stop
         } finally {
             if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
@@ -482,7 +472,11 @@ function Install-NPIFromGitHub {
             if ($found) { $npiExe = $found.FullName }
         }
         if (Test-Path $npiExe) {
-            Write-RegLog "NPI installiert: $npiExe ($($release.tag_name))"
+            $installed = try { (Get-Item $npiExe -ErrorAction Stop).VersionInfo.FileVersion } catch { '?' }
+            if ($installed -notlike "$tag*") {
+                Write-RegLog "NPI-Install: Versions-Mismatch - erwartet v$tag, installiert v$installed" 'WARN'
+            }
+            Write-RegLog "NPI installiert: $npiExe (gepinnt v$tag, Datei v$installed)"
             return $npiExe
         }
         return $null
@@ -514,16 +508,64 @@ function Install-NPIFromGitHub {
 # Treiber stehen - kein falscher "angewandt"-Stamp wie in <=0.27.
 # ===========================================================================
 
-# Hex-String ('0x10835002' / '0xED') -> dezimaler uint (.nip nutzt Dezimalwerte).
-# Leerer/unguelitger Input wird mit KLARER Meldung abgewiesen - sonst wirft
-# [Convert]::ToUInt32 nur das kryptische "keine bekannten Ziffern gefunden".
+# NPI-SettingValues/-IDs format-unabhaengig nach uint32 parsen.
+# NPI v2.x exportiert .nip-Werte DEZIMAL  (<SettingValue>1</SettingValue>),
+# NPI v3.x haeufig als HEX-String         (<SettingValue>0x00000001</SettingValue>).
+# Diese Funktion akzeptiert beides - plus Gross-'X' ('0X1'), reine Hex-Strings
+# mit Buchstaben und leere/$null-Werte (-> $Default). Garbage wird GELOGGT, nicht
+# geworfen: ein einzelner kaputter Wert aus einer fremden .nip darf den
+# Read-Modify-Write-Zyklus nicht abbrechen. Fuer die hartkodierten Profil-IDs
+# gilt ConvertFrom-NpiHex (wirft - dort waere Garbage ein Programmierfehler).
+function ConvertTo-UInt32Smart {
+    param(
+        [AllowEmptyString()]
+        [AllowNull()]
+        $Value,
+        [uint32]$Default = 0
+    )
+    if ($null -eq $Value) { return $Default }
+    $s = "$Value".Trim()
+    if ([string]::IsNullOrWhiteSpace($s)) { return $Default }
+    try {
+        if ($s -match '^0[xX][0-9A-Fa-f]+$') {
+            return [Convert]::ToUInt32($s.Substring(2), 16)
+        }
+        elseif ($s -match '^-?[0-9]+$') {
+            $i64 = [int64]$s
+            if ($i64 -lt 0)                  { return [uint32]($i64 -band 4294967295L) }
+            if ($i64 -gt [uint32]::MaxValue) { return [uint32]::MaxValue }
+            return [uint32]$i64
+        }
+        elseif ($s -match '^[0-9A-Fa-f]+$') {
+            # reiner Hex-String ohne 0x-Prefix (enthaelt zwingend A-F, sonst
+            # haette der Dezimal-Zweig oben schon gegriffen)
+            return [Convert]::ToUInt32($s, 16)
+        }
+        else {
+            Write-RegLog "ConvertTo-UInt32Smart: unbekanntes Format '$s' - Default $Default" 'WARN'
+            return $Default
+        }
+    }
+    catch {
+        Write-RegLog "ConvertTo-UInt32Smart: Parse-Fehler '$s' - $($_.Exception.Message)" 'WARN'
+        return $Default
+    }
+}
+
+# Hex-/Dezimal-String ('0x10835002' / '0xED' / '237') -> dezimaler uint.
+# Fuer die HARTKODIERTEN Profil-IDs/-Werte gedacht: leerer/kaputter Input ist
+# hier ein Programmierfehler und wird mit KLARER Meldung geworfen (nicht still
+# auf 0 defaulten). Gross-'X' wird - anders als frueher - mit akzeptiert.
 function ConvertFrom-NpiHex {
     param([string]$Hex)
-    $clean = ($Hex -replace '^0x','').Trim()
-    if ([string]::IsNullOrWhiteSpace($clean)) {
-        throw "ConvertFrom-NpiHex: leerer/ungueltiger Hex-Wert '$Hex'"
+    $s = "$Hex".Trim()
+    if ([string]::IsNullOrWhiteSpace($s)) {
+        throw "ConvertFrom-NpiHex: leerer/ungueltiger Wert '$Hex'"
     }
-    return [Convert]::ToUInt32($clean, 16)
+    if ($s -notmatch '^(0[xX])?[0-9A-Fa-f]+$') {
+        throw "ConvertFrom-NpiHex: unparsebarer Hex-Wert '$Hex'"
+    }
+    return [Convert]::ToUInt32(($s -replace '^0[xX]',''), 16)
 }
 
 # Laedt eine XML-Datei encoding-robust in ein XmlDocument. NPI >=3.x exportiert
@@ -629,7 +671,11 @@ function Read-NipProfiles {
         if ($p.Settings -and $p.Settings.ProfileSetting) {
             foreach ($s in @($p.Settings.ProfileSetting)) {
                 if ($null -eq $s.SettingID) { continue }
-                $sid = [string]$s.SettingID
+                # SettingID format-unabhaengig auf Dezimal-String normalisieren:
+                # NPI v3.x schreibt IDs haeufig als Hex (0x10835000), v2.x dezimal.
+                # Ohne Normalisierung schlagen alle Settings-Lookups (ContainsKey)
+                # fehl, weil der Schluessel mal hex, mal dezimal vorliegt.
+                $sid = [string](ConvertTo-UInt32Smart -Value ([string]$s.SettingID))
                 $stype = if ($s.ValueType) { [string]$s.ValueType } else { 'Dword' }
                 $sname = if ($s.SettingNameInfo) { [string]$s.SettingNameInfo } else { '' }
                 $settings[$sid] = @{ Value=[string]$s.SettingValue; Type=$stype; Name=$sname }
@@ -697,10 +743,17 @@ function Test-NpiChangesApplied {
         if ($ch.Set) {
             foreach ($hid in $ch.Set.Keys) {
                 $idDec = [string](ConvertFrom-NpiHex $hid)
-                $want  = [string](ConvertFrom-NpiHex $ch.Set[$hid])
-                $got   = if ($prof -and $prof.Settings.ContainsKey($idDec)) { [string]$prof.Settings[$idDec].Value } else { $null }
+                $want  = [uint32](ConvertFrom-NpiHex $ch.Set[$hid])
+                # Soll/Ist als uint32 vergleichen, NICHT als String: der .nip-Wert
+                # kommt je nach NPI-Version dezimal ('1') oder hex ('0x00000001').
+                # Ein String-Vergleich meldete sonst faelschlich "nicht angewandt".
+                if (-not ($prof -and $prof.Settings.ContainsKey($idDec))) {
+                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: nicht im Profil gefunden" }
+                }
+                $rawGot = [string]$prof.Settings[$idDec].Value
+                $got    = ConvertTo-UInt32Smart -Value $rawGot
                 if ($got -ne $want) {
-                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: erwartet $want, gelesen '$got'" }
+                    return @{ Verified=$false; Detail="Profil '$pname', Setting ${hid}: erwartet $want, gelesen '$rawGot' (=$got)" }
                 }
             }
         }
@@ -759,24 +812,46 @@ function Set-NpiProfileSettings {
         $current = @{}
     }
     $out = @{}
+    $skippedTotal = @()
     foreach ($ch in $Changes) {
         $pname = [string]$ch.Profile
         $existing = if ($current.ContainsKey($pname)) { $current[$pname] } else { $null }
         $settings = @{}
         if ($existing) { foreach ($k in $existing.Settings.Keys) { $settings[$k] = $existing.Settings[$k] } }
         $exe = if ($ch.Exe) { @($ch.Exe) } elseif ($existing) { $existing.Exe } else { @() }
+        $failed = @()
         if ($ch.Set) {
             foreach ($hid in $ch.Set.Keys) {
-                $idDec  = [string](ConvertFrom-NpiHex $hid)
-                $valDec = [string](ConvertFrom-NpiHex $ch.Set[$hid])
-                $settings[$idDec] = @{ Value=$valDec; Type='Dword'; Name='' }
+                # Per-Setting try/catch: ein einzelner kaputter Wert darf den
+                # restlichen Apply NICHT killen - die uebrigen Settings werden
+                # trotzdem gesetzt, der Fehler gesammelt und unten gemeldet.
+                try {
+                    $idDec = [string](ConvertFrom-NpiHex $hid)
+                    $valU  = ConvertFrom-NpiHex $ch.Set[$hid]
+                    $oldU  = if ($settings.ContainsKey($idDec)) { ConvertTo-UInt32Smart -Value $settings[$idDec].Value } else { $null }
+                    $settings[$idDec] = @{ Value=[string]$valU; Type='Dword'; Name='' }
+                    $oldHex = if ($null -ne $oldU) { '0x{0:X8}' -f $oldU } else { '(neu)' }
+                    Write-RegLog ("NPI '{0}' Setting {1}: {2} -> 0x{3:X8}" -f $pname, $hid, $oldHex, $valU)
+                } catch {
+                    $failed += "$hid ($($_.Exception.Message))"
+                    Write-RegLog "NPI '$pname' Setting ${hid}: uebersprungen - $($_.Exception.Message)" 'ERROR'
+                }
             }
         }
         if ($ch.Remove) {
             foreach ($hid in $ch.Remove) {
-                $idDec = [string](ConvertFrom-NpiHex $hid)
-                if ($settings.ContainsKey($idDec)) { $settings.Remove($idDec) }
+                try {
+                    $idDec = [string](ConvertFrom-NpiHex $hid)
+                    if ($settings.ContainsKey($idDec)) { $settings.Remove($idDec) }
+                } catch {
+                    $failed += "$hid ($($_.Exception.Message))"
+                    Write-RegLog "NPI '$pname' Remove ${hid}: uebersprungen - $($_.Exception.Message)" 'ERROR'
+                }
             }
+        }
+        if ($failed.Count -gt 0) {
+            $skippedTotal += $failed
+            Write-RegLog ("NPI '{0}': {1} Setting(s) uebersprungen: {2}" -f $pname, $failed.Count, ($failed -join '; ')) 'WARN'
         }
         $out[$pname] = @{ Exe=$exe; Settings=$settings }
     }
@@ -830,7 +905,11 @@ function Set-NpiProfileSettings {
                   Backup=$backup }
     }
     Write-RegLog "NPI Verifikation OK: $($verify.Detail)"
-    return @{ Success=$true; Message="NVIDIA-Profil(e) importiert und im Treiber verifiziert (ExitCode $rc)"; Backup=$backup }
+    $msg = "NVIDIA-Profil(e) importiert und im Treiber verifiziert (ExitCode $rc)"
+    if ($skippedTotal.Count -gt 0) {
+        $msg += " - $($skippedTotal.Count) Setting(s) uebersprungen (siehe Log)"
+    }
+    return @{ Success=$true; Message=$msg; Backup=$backup }
 }
 
 # --- High-Level Preset-API (von der Suite aufgerufen, exportiert) ----------
@@ -871,7 +950,7 @@ function Invoke-NPIPreset {
             '0x1094F157'='0x00000000'; '0x1094F1F7'='0x00000000' } }
         $pubgMap['0x1194F158'] = '0x00000000'
     }
-    $changes += @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$pubgMap }
+    $changes += @{ Profile=$script:NpiPubgProfileName; Exe=$script:NpiPubgExecutable; Set=$pubgMap }
 
     $res = Set-NpiProfileSettings -NpiPath $npi -Changes $changes
     if ($res.Success) {
@@ -915,7 +994,7 @@ function Revert-NPIPreset {
     $baseIds  = @($script:NpiGSyncBaseSettings | ForEach-Object { $_.Id })
     $res = Set-NpiProfileSettings -NpiPath $npi -Changes @(
         @{ Profile=$script:NpiBaseProfileName; Exe=$null; Remove=$baseIds }
-        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Remove=$pubgIds }
+        @{ Profile=$script:NpiPubgProfileName; Exe=$script:NpiPubgExecutable; Remove=$pubgIds }
     )
     if ($res.Success -and (Test-Path $script:NpiPresetStamp)) {
         Remove-Item $script:NpiPresetStamp -Force -ErrorAction SilentlyContinue
@@ -930,6 +1009,18 @@ function Get-NPIPresetList {
         $out += @{ Key=$k; Label=$script:NpiPresets[$k].Label; Summary=$script:NpiPresets[$k].Summary }
     }
     return $out
+}
+
+# Liefert Metadaten des geladenen NVIDIA-Profils (PUBGNvidiaProfile.psd1) fuer
+# die UI: @{ Loaded; Version; Path; ProfileName; Executable }.
+function Get-NPIProfileMeta {
+    return @{
+        Loaded      = [bool]$script:NpiProfileMeta.Loaded
+        Version     = [string]$script:NpiProfileMeta.Version
+        Path        = [string]$script:NpiProfileMeta.Path
+        ProfileName = [string]$script:NpiPubgProfileName
+        Executable  = [string]$script:NpiPubgExecutable
+    }
 }
 
 # ===========================================================================
@@ -1785,4 +1876,4 @@ function Get-PUBGTweakRegistry {
     return $script:PUBGTweaks
 }
 
-Export-ModuleMember -Function Get-PUBGTweakRegistry, Invoke-NPIPreset, Get-NPIPresetStatus, Revert-NPIPreset, Get-NPIPresetList
+Export-ModuleMember -Function Get-PUBGTweakRegistry, Invoke-NPIPreset, Get-NPIPresetStatus, Revert-NPIPreset, Get-NPIPresetList, Get-NPIProfileMeta
