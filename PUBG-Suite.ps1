@@ -56,7 +56,7 @@ if (-not $__suiteIsAdmin) {
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.30.0-beta'
+    Version    = '0.31.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -618,7 +618,10 @@ try {
     if (-not (Test-Path $Global:Suite.RegistryPath)) {
         throw "Registry-Modul nicht gefunden: $($Global:Suite.RegistryPath)"
     }
-    Import-Module $Global:Suite.RegistryPath -Force -ErrorAction Stop
+    # -DisableNameChecking: das Modul exportiert Revert-NPIPreset; "Revert" ist
+    # kein PowerShell-Standardverb (Get-Verb) und triggert sonst eine WARNUNG,
+    # die im "irm | iex"-Workflow wie ein Fehler aussieht.
+    Import-Module $Global:Suite.RegistryPath -Force -DisableNameChecking -ErrorAction Stop
     Write-SuiteLog "Tweak-Registry geladen: $($Global:Suite.RegistryPath)" 'INFO'
 } catch {
     Write-SuiteLog "FEHLER beim Laden der Tweak-Registry: $($_.Exception.Message)" 'ERROR'
