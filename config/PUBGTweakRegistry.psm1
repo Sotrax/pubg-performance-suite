@@ -830,24 +830,46 @@ function Set-NpiProfileSettings {
         $current = @{}
     }
     $out = @{}
+    $skippedTotal = @()
     foreach ($ch in $Changes) {
         $pname = [string]$ch.Profile
         $existing = if ($current.ContainsKey($pname)) { $current[$pname] } else { $null }
         $settings = @{}
         if ($existing) { foreach ($k in $existing.Settings.Keys) { $settings[$k] = $existing.Settings[$k] } }
         $exe = if ($ch.Exe) { @($ch.Exe) } elseif ($existing) { $existing.Exe } else { @() }
+        $failed = @()
         if ($ch.Set) {
             foreach ($hid in $ch.Set.Keys) {
-                $idDec  = [string](ConvertFrom-NpiHex $hid)
-                $valDec = [string](ConvertFrom-NpiHex $ch.Set[$hid])
-                $settings[$idDec] = @{ Value=$valDec; Type='Dword'; Name='' }
+                # Per-Setting try/catch: ein einzelner kaputter Wert darf den
+                # restlichen Apply NICHT killen - die uebrigen Settings werden
+                # trotzdem gesetzt, der Fehler gesammelt und unten gemeldet.
+                try {
+                    $idDec = [string](ConvertFrom-NpiHex $hid)
+                    $valU  = ConvertFrom-NpiHex $ch.Set[$hid]
+                    $oldU  = if ($settings.ContainsKey($idDec)) { ConvertTo-UInt32Smart -Value $settings[$idDec].Value } else { $null }
+                    $settings[$idDec] = @{ Value=[string]$valU; Type='Dword'; Name='' }
+                    $oldHex = if ($null -ne $oldU) { '0x{0:X8}' -f $oldU } else { '(neu)' }
+                    Write-RegLog ("NPI '{0}' Setting {1}: {2} -> 0x{3:X8}" -f $pname, $hid, $oldHex, $valU)
+                } catch {
+                    $failed += "$hid ($($_.Exception.Message))"
+                    Write-RegLog "NPI '$pname' Setting ${hid}: uebersprungen - $($_.Exception.Message)" 'ERROR'
+                }
             }
         }
         if ($ch.Remove) {
             foreach ($hid in $ch.Remove) {
-                $idDec = [string](ConvertFrom-NpiHex $hid)
-                if ($settings.ContainsKey($idDec)) { $settings.Remove($idDec) }
+                try {
+                    $idDec = [string](ConvertFrom-NpiHex $hid)
+                    if ($settings.ContainsKey($idDec)) { $settings.Remove($idDec) }
+                } catch {
+                    $failed += "$hid ($($_.Exception.Message))"
+                    Write-RegLog "NPI '$pname' Remove ${hid}: uebersprungen - $($_.Exception.Message)" 'ERROR'
+                }
             }
+        }
+        if ($failed.Count -gt 0) {
+            $skippedTotal += $failed
+            Write-RegLog ("NPI '{0}': {1} Setting(s) uebersprungen: {2}" -f $pname, $failed.Count, ($failed -join '; ')) 'WARN'
         }
         $out[$pname] = @{ Exe=$exe; Settings=$settings }
     }
@@ -901,7 +923,11 @@ function Set-NpiProfileSettings {
                   Backup=$backup }
     }
     Write-RegLog "NPI Verifikation OK: $($verify.Detail)"
-    return @{ Success=$true; Message="NVIDIA-Profil(e) importiert und im Treiber verifiziert (ExitCode $rc)"; Backup=$backup }
+    $msg = "NVIDIA-Profil(e) importiert und im Treiber verifiziert (ExitCode $rc)"
+    if ($skippedTotal.Count -gt 0) {
+        $msg += " - $($skippedTotal.Count) Setting(s) uebersprungen (siehe Log)"
+    }
+    return @{ Success=$true; Message=$msg; Backup=$backup }
 }
 
 # --- High-Level Preset-API (von der Suite aufgerufen, exportiert) ----------
