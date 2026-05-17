@@ -51,6 +51,13 @@ $script:RegLogDir     = Join-Path $script:RegLocalAppData 'PUBGSuite\logs'
 $script:NpiPresetStamp = Join-Path $script:RegLocalAppData 'PUBGDiag\nvpreset.stamp'
 $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 
+# NPI wird auf eine GEPINNTE Version festgenagelt. Der Maintainer markiert die
+# v3.x-Serie durchgaengig als Pre-Release; v3.x exportiert .nip ausserdem im
+# geaenderten Hex-Format, das hier wiederholt Apply-Fehler ausgeloest hat.
+# 2.4.0.31 ist das aktuelle Latest-Stable (kein Pre-Release). GitHub-Tag OHNE
+# 'v'-Prefix - die v3.x-Tags haben eines, die 2.4er nicht.
+$script:NpiPinnedVersion = '2.4.0.31'
+
 # NVIDIA PUBG-Profil: Profilname + die Treiber-Settings. Modul-Scope, damit
 # Apply (Invoke-NPIPubgProfile) und Revert (Revert-NPIPubgProfile) GENAU dieselbe
 # Liste nutzen - eine einzige Quelle fuer Setzen und Zuruecksetzen.
@@ -446,21 +453,22 @@ function Get-NPIPath {
 function Install-NPIFromGitHub {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Write-RegLog 'NPI-Install: hole Release-Liste von GitHub...'
-        # /releases/latest taugt nicht: der Maintainer markiert neuere Versionen
-        # nicht zuverlaessig als "latest" (dort ist eine aeltere 2.4er gepinnt,
-        # obwohl 3.x existiert). Daher alle Releases holen und die hoechste
-        # Versionsnummer mit ZIP-Asset waehlen.
-        $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases?per_page=30' `
-            -Headers @{ 'User-Agent' = 'PUBG-Suite' } -ErrorAction Stop
-        $release = $releases |
-            Where-Object { -not $_.draft -and ($_.assets | Where-Object { $_.name -match '\.zip$' }) } |
-            Sort-Object { try { [version]([string]$_.tag_name -replace '^[vV]','') } catch { [version]'0.0' } } -Descending |
-            Select-Object -First 1
-        if (-not $release) { throw 'Kein passendes NPI-Release mit ZIP-Asset gefunden' }
-        $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
-        if (-not $zipAsset) { throw 'Kein ZIP-Asset im NPI-Release gefunden' }
-        Write-RegLog "NPI-Install: neuestes Release = $($release.tag_name)"
+        $tag = $script:NpiPinnedVersion
+        Write-RegLog "NPI-Install: gepinnte Version $tag wird geholt..."
+        # Frueher wurden ALLE Releases geholt und die hoechste Versionsnummer
+        # gewaehlt - das zog die v3.x-Pre-Releases (geaendertes .nip-Format).
+        # Jetzt gezielt das Release des gepinnten Tags ($NpiPinnedVersion).
+        # Schlaegt die API fehl (Rate-Limit o.ae.), wird auf die direkte
+        # Download-URL des unveraenderlichen Release-Assets zurueckgefallen.
+        $zipUrl = "https://github.com/Orbmu2k/nvidiaProfileInspector/releases/download/$tag/nvidiaProfileInspector.zip"
+        try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/tags/$tag" `
+                -Headers @{ 'User-Agent' = 'PUBG-Suite' } -ErrorAction Stop
+            $zipAsset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
+            if ($zipAsset) { $zipUrl = $zipAsset.browser_download_url }
+        } catch {
+            Write-RegLog "NPI-Install: GitHub-API nicht erreichbar ($($_.Exception.Message)) - nutze direkte Download-URL" 'WARN'
+        }
 
         $target = $script:NpiDefaultDir
         try {
@@ -469,9 +477,9 @@ function Install-NPIFromGitHub {
             $target = Join-Path $env:USERPROFILE 'Tools\nvidiaProfileInspector'
             if (-not (Test-Path $target)) { New-Item -Path $target -ItemType Directory -Force | Out-Null }
         }
-        $zipPath = Join-Path $env:TEMP "npi_$($release.tag_name)_$(Get-Random).zip"
+        $zipPath = Join-Path $env:TEMP "npi_${tag}_$(Get-Random).zip"
         try {
-            Invoke-WebRequest -Uri $zipAsset.browser_download_url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
             Expand-Archive -Path $zipPath -DestinationPath $target -Force -ErrorAction Stop
         } finally {
             if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
@@ -482,7 +490,11 @@ function Install-NPIFromGitHub {
             if ($found) { $npiExe = $found.FullName }
         }
         if (Test-Path $npiExe) {
-            Write-RegLog "NPI installiert: $npiExe ($($release.tag_name))"
+            $installed = try { (Get-Item $npiExe -ErrorAction Stop).VersionInfo.FileVersion } catch { '?' }
+            if ($installed -notlike "$tag*") {
+                Write-RegLog "NPI-Install: Versions-Mismatch - erwartet v$tag, installiert v$installed" 'WARN'
+            }
+            Write-RegLog "NPI installiert: $npiExe (gepinnt v$tag, Datei v$installed)"
             return $npiExe
         }
         return $null
