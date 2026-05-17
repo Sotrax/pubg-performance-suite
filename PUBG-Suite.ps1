@@ -758,24 +758,17 @@ function Invoke-EsportGfxApply {
                 $null = Update-IniValue -Path $gus -Section $resSection -Key "LastUserConfirmedResolutionSize$axis" -Value $matches[1]
             }
         }
-        # FPS-Cap menuekonform setzen = In-Game "Display Based" (FrameRateLimit auf
-        # die Monitor-Hz). FrameRateLimit liegt in [/Script/TslGame.TslGameUserSettings].
-        # Ein krummer Wert wie 237 ist ueber das Spiel-Menue NICHT erzeugbar und wird
-        # von PUBG beim Start zurueckgesetzt - der scharfe Competitive-Cap (Hz minus 3)
-        # laeuft daher ueber den NVIDIA Frame Rate Limiter (Tweak 'nvprofile').
-        $capHz = Get-PrimaryMonitorHz
-        $capWritten = Update-IniValue -Path $gus -Section $resSection -Key 'FrameRateLimit' -Value ('{0}.000000' -f $capHz)
-        # Post-Apply-Verifikation: FrameRateLimit zuruecklesen
-        $vNow = Get-Content $gus -Raw -ErrorAction SilentlyContinue
-        $capOk = $capWritten -and ($vNow -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)') `
-                 -and ([int][math]::Floor([double]$matches[1]) -eq $capHz)
-        $capMsg = if ($capOk) {
-            "FPS-Cap: In-Game Display-Based ($capHz) - scharfer Cap $($capHz - 3) via NVIDIA-Profil (Tweak 'nvprofile' anwenden)"
-        } else {
-            'WARN: FrameRateLimit (FPS-Cap) konnte nicht verifiziert werden'
-        }
-        Write-SuiteLog "esportgfx: Competitive-Grafik-Profil + LastUserConfirmed + FrameRateLimit geschrieben - $capMsg" 'INFO'
-        return @{ Success=$true; Message="Competitive-Grafik-Profil angewendet. $capMsg"; Snapshot=$snap }
+        # FPS-Cap wird hier BEWUSST NICHT geschrieben. Der dedizierte Tweak
+        # 'fpscap' ist die alleinige Quelle fuer FrameRateLimit - er rechnet
+        # Monitor-Hz minus Offset und schreibt FrameRateLimit +
+        # InGameCustomFrameRateLimit + InGameFrameRateLimitType konsistent.
+        # Frueher setzte esportgfx hier zusaetzlich FrameRateLimit auf die
+        # Monitor-Hz; das kollidierte mit 'fpscap' - je nach Apply-Reihenfolge
+        # gewann ein anderer Wert. Single Source of Truth = 'fpscap'.
+        Write-SuiteLog 'esportgfx: Competitive-Grafik-Profil + LastUserConfirmed geschrieben (FPS-Cap separat ueber Tweak fpscap)' 'INFO'
+        return @{ Success=$true
+                  Message="Competitive-Grafik-Profil angewendet. FPS-Cap separat ueber den Tweak 'fpscap' setzen."
+                  Snapshot=$snap }
     } catch {
         Write-SuiteLog "esportgfx Apply Exception: $($_.Exception.Message)" 'ERROR'
         return @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null }
