@@ -56,7 +56,7 @@ if (-not $__suiteIsAdmin) {
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.29.0-beta'
+    Version    = '0.30.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"
@@ -66,7 +66,7 @@ $Global:Suite = @{
     CaptureDir = "$env:LOCALAPPDATA\PUBGSuite\captures"
     CapturesFile = "$env:LOCALAPPDATA\PUBGSuite\captures.json"
     MonitorIDs = "$env:LOCALAPPDATA\PUBGSuite\disabled-monitors.txt"
-    NPIStamp   = "$env:LOCALAPPDATA\PUBGDiag\npi-applied.stamp"
+    NvPresetStamp = "$env:LOCALAPPDATA\PUBGDiag\nvpreset.stamp"
     # Diag-Script liegt fest neben der Suite (Repo: diagnose\PUBG-Diagnose-v7.ps1,
     # Bootstrap-Install: %LOCALAPPDATA%\PUBGSuite\app\diagnose\PUBG-Diagnose-v7.ps1).
     # $PSScriptRoot zeigt in beiden Faellen auf den richtigen Folder.
@@ -366,21 +366,17 @@ function Get-LiveStatus {
         }
     } else { $s['Engine.ini'] = @{ Value='nicht gefunden'; Status='SKIP' } }
 
-    # FPS-Cap: In-Game-FrameRateLimit soll = Monitor-Hz (Display-Based) sein,
-    # der scharfe Competitive-Cap (Hz-3) kommt vom NVIDIA-Treiber-Limiter.
+    # FPS-Cap: In-Game-FrameRateLimit aus PUBGs GameUserSettings.ini. Der
+    # Competitive-Cap wird vom Tweak 'fpscap' gesetzt (Monitor-Hz minus Offset).
     $gusFps = "$env:LOCALAPPDATA\TslGame\Saved\Config\WindowsNoEditor\GameUserSettings.ini"
     if (Test-Path $gusFps) {
-        $hzFps = Get-PrimaryMonitorHz
         $gcFps = Get-Content $gusFps -Raw -ErrorAction SilentlyContinue
-        $npiOk = Test-Path $Global:Suite.NPIStamp
         if ($gcFps -and ($gcFps -match '(?m)^\s*FrameRateLimit\s*=\s*([\d.]+)')) {
             $frl = [int][math]::Floor([double]$matches[1])
-            if ($frl -eq $hzFps -and $npiOk) {
-                $s['FPS-Cap'] = @{ Value="In-Game $frl + Treiber $($hzFps - 3)"; Status='OK' }
-            } elseif ($frl -eq $hzFps) {
-                $s['FPS-Cap'] = @{ Value="In-Game $frl, Treiber-Cap fehlt"; Status='WARN' }
+            if ($frl -ge 60) {
+                $s['FPS-Cap'] = @{ Value="In-Game-Cap: $frl FPS"; Status='OK' }
             } else {
-                $s['FPS-Cap'] = @{ Value="$frl FPS (nicht Display-Based)"; Status='WARN' }
+                $s['FPS-Cap'] = @{ Value="$frl FPS (sehr niedrig)"; Status='WARN' }
             }
         } else {
             $s['FPS-Cap'] = @{ Value='kein Cap gesetzt'; Status='WARN' }
@@ -389,22 +385,15 @@ function Get-LiveStatus {
         $s['FPS-Cap'] = @{ Value='GameUserSettings.ini fehlt'; Status='SKIP' }
     }
 
-    # G-Sync: VRR ist die Voraussetzung fuer tearing-freies Spielen ohne
-    # V-Sync-Latenz. Stamp wird vom 'gsync'-Tweak gesetzt. Ob VRR im Monitor-OSD
-    # aktiv ist, kann die Suite nicht pruefen - daher der OSD-Hinweis.
-    $gsyncStamp = "$env:LOCALAPPDATA\PUBGDiag\gsync-applied.stamp"
-    if (Test-Path $gsyncStamp) {
-        $s['G-Sync'] = @{ Value='aktiviert (VRR im Monitor-OSD pruefen)'; Status='OK' }
+    # NVIDIA-Treiberprofil: welches Preset ist angewandt (Grafik-Tab). G-Sync +
+    # V-Sync stecken im Preset; ob VRR im Monitor-OSD aktiv ist, kann die Suite
+    # nicht pruefen - daher der OSD-Hinweis im Settings-Tab.
+    $nvSt = $null
+    try { $nvSt = Get-NPIPresetStatus } catch {}
+    if ($nvSt -and $nvSt.Applied) {
+        $s['NV Profil'] = @{ Value="$($nvSt.Label) (vor $($nvSt.AgeDays)d)"; Status='OK' }
     } else {
-        $s['G-Sync'] = @{ Value='nicht aktiviert'; Status='WARN' }
-    }
-
-    # NPI Stamp
-    if (Test-Path $Global:Suite.NPIStamp) {
-        $age = (Get-Date) - (Get-Item $Global:Suite.NPIStamp).LastWriteTime
-        $s['NV Profil'] = @{ Value="applied vor $([int]$age.TotalDays)d"; Status='OK' }
-    } else {
-        $s['NV Profil'] = @{ Value='nicht applied'; Status='WARN' }
+        $s['NV Profil'] = @{ Value='kein Preset angewandt'; Status='WARN' }
     }
 
     # Defender Exclusion - non-Admin sieht ExclusionPath nicht zuverlaessig
@@ -671,6 +660,12 @@ if (Get-Command Get-PUBGTweakRegistry -ErrorAction SilentlyContinue) {
     Write-SuiteLog "Tweaks aus Registry uebernommen: $($Global:Tweaks.Count)" 'INFO'
 } else {
     Write-SuiteLog 'Get-PUBGTweakRegistry nicht verfuegbar - Tweaks-Tab bleibt leer' 'ERROR'
+}
+
+# NVIDIA-Presets fuer den Grafik-Tab-Dropdown (aus dem Tweak-Registry-Modul).
+$Global:NvPresets = @()
+if (Get-Command Get-NPIPresetList -ErrorAction SilentlyContinue) {
+    $Global:NvPresets = @(Get-NPIPresetList)
 }
 
 # ==================== ESPORT-GRAFIK-PROFIL (eigener Grafik-Tab) ===============
@@ -1802,6 +1797,35 @@ $xamlTemplate = @'
                                 <TextBlock x:Name="lblGfxInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Border>
+
+                        <!-- NVIDIA-Treiberprofil-Card (Preset-Dropdown) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="NVIDIA-Treiberprofil (Competitive-Preset)" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"
+                                           Text="Schreibt ein validiertes, in sich kohaerentes NVIDIA-Treiberprofil fuer PUBG via NVIDIA Profile Inspector - Power Management, Texture Filtering, G-Sync und V-Sync in einem Rutsch. NVPI wird bei Bedarf automatisch installiert. Alle Setting-IDs sind gegen die NVPI-Quelle verifiziert. Erfordert Admin-Rechte."/>
+                                <Border Background="@@BgBase@@" CornerRadius="3" Padding="10,8" Margin="0,0,0,10">
+                                    <StackPanel>
+                                        <TextBlock Text="Status" Foreground="@@TextSecondary@@" FontSize="10" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="lblNvPresetStatus" Text="..." FontSize="13" FontWeight="Bold" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="Preset waehlen" Foreground="@@TextPrimary@@" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="cmbNvPreset" Width="400" HorizontalAlignment="Left" Margin="0,0,0,8">
+                                    <ComboBoxItem Tag="blurbusters" Content="Blur Busters - G-Sync + V-Sync (tearing-frei)"/>
+                                    <ComboBoxItem Tag="competitive" Content="Real Competitive - G-Sync aus (max. latenzfrei)"/>
+                                </ComboBox>
+                                <Border Background="@@BgBase@@" CornerRadius="3" Padding="10,8" Margin="0,0,0,10">
+                                    <TextBlock x:Name="lblNvPresetSummary" Foreground="@@TextSecondary@@" FontSize="11" TextWrapping="Wrap" Text=""/>
+                                </Border>
+                                <Border Background="@@WarnBg@@" BorderBrush="@@StatusWarn@@" BorderThickness="0,0,0,2" CornerRadius="3" Padding="10,8" Margin="0,0,0,10">
+                                    <TextBlock Foreground="@@StatusWarn@@" FontSize="11" TextWrapping="Wrap"
+                                               Text="VRR/Adaptive-Sync muss zusaetzlich im Monitor-OSD aktiv sein - das kann die Suite nicht setzen (siehe Settings-Tab, OSD-Empfehlungen). PUBG muss beim Anwenden nicht geschlossen sein - das Profil liegt im Treiber, nicht in der PUBG-INI."/>
+                                </Border>
+                                <Button x:Name="btnNvPresetApply" Content="Preset anwenden" Style="{StaticResource SuccessButton}" Width="220" Height="34" HorizontalAlignment="Left"/>
+                                <TextBlock x:Name="lblNvPresetInfo" Text="" Foreground="@@TextSecondary@@" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -1923,13 +1947,13 @@ $xamlTemplate = @'
                                     <Run Text='  irm "https://raw.githubusercontent.com/Sotrax/pubg-performance-suite/main/launch.ps1" | iex'/>
                                     <LineBreak/><LineBreak/>
                                     <Run Text="Auto-Detection:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
-                                    <Run Text="  Monitor-Hz, PUBG-Steam-Pfad, dedizierte GPU, Energieplan, NPI-Apply-Stamp"/>
+                                    <Run Text="  Monitor-Hz, PUBG-Steam-Pfad, dedizierte GPU, Energieplan, NVIDIA-Preset"/>
                                     <LineBreak/>
                                     <Run Text="Backups:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  Tweaks legen .bak_&lt;timestamp&gt; neben das Original an, Registry-Snapshots in history.json"/>
                                     <LineBreak/>
                                     <Run Text="Reversibel:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
-                                    <Run Text="  15 von 16 Tweaks per Klick rueckgaengig (NV-Profil nutzt NPI-eigene Reset-Funktion)"/>
+                                    <Run Text="  Alle Tweaks per Klick rueckgaengig; NVIDIA-Treiberprofil via Grafik-Tab (Preset-Dropdown)"/>
                                     <LineBreak/>
                                     <Run Text="BattlEye-safe:" FontWeight="SemiBold" Foreground="@@Accent@@"/>
                                     <Run Text="  Kein Special K, kein ReShade, kein DXVK, keine ban-bait Engine.ini CVars, kein Process-Lasso auf BEService"/>
@@ -2009,6 +2033,7 @@ foreach ($name in @('mainTabs','lblVersion','updateBadge','lblUpdate','lblAdmin'
     'lblGfxStatus','lblGfxValues','lblGfxInfo','btnGfxApply','btnGfxRevert','btnGfxRefresh',
     'cmbFullscreen','cmbAA','cmbTexture','cmbViewDist','cmbShadow','cmbPost','cmbEffects','cmbFoliage','btnGfxApplyCustom','lblGfxCustomInfo',
     'lblIndFullscreen','lblIndAA','lblIndTexture','lblIndViewDist','lblIndShadow','lblIndPost','lblIndEffects','lblIndFoliage','lblGfxMatchBadge','gfxMatchBadge',
+    'cmbNvPreset','btnNvPresetApply','lblNvPresetStatus','lblNvPresetSummary','lblNvPresetInfo',
     'lblDetectedHw','monitorList','btnDetectMonitors','btnAutoPattern',
     'btnOpenLogs','btnOpenBackups','btnClearHistory','lblHistoryStat',
     'btnRefreshBackups','lblBackupInfo','backupList',
@@ -2060,10 +2085,9 @@ function Update-StatusGrid {
     if ($live['RTSS'].Status -ne 'OK')         { $recos += @{ Sev='WARN'; Title='RTSS laeuft'; Detail='Erzwingt Present-Mode 5 (Composed Copy, ~3-5ms Overhead). Game-Mode-Start killt es automatisch'; TabIdx=2 } }
     if ($live['Monitore'].Status -ne 'OK')     { $recos += @{ Sev='WARN'; Title='Multi-Monitor aktiv'; Detail='Verhindert Hardware Independent Flip. Game Mode deaktiviert Sekundaer-Monitore'; TabIdx=2 } }
     if ($live['Engine.ini'].Status -ne 'OK')   { $recos += @{ Sev='WARN'; Title='Engine.ini Tweaks fehlen'; Detail='Sharpen + Streaming + Pacing nicht gesetzt. Tweak: "Engine.ini Tweaks"'; TabIdx=1 } }
-    if ($live['NV Profil'].Status -ne 'OK')    { $recos += @{ Sev='WARN'; Title='NVIDIA Profile nicht applied'; Detail='Reflex + Power Mgmt + Threaded Optim. nicht via NPI gesetzt. Tweak: "NVIDIA Profile"'; TabIdx=1 } }
+    if ($live['NV Profil'].Status -ne 'OK')    { $recos += @{ Sev='WARN'; Title='Kein NVIDIA-Treiberprofil aktiv'; Detail='Im Grafik-Tab ein NVIDIA-Preset waehlen (Blur Busters = tearing-frei / Real Competitive = max. latenzfrei) und anwenden - Power Mgmt, Texture Filtering, G-Sync + V-Sync in einem Rutsch.'; TabIdx=5 } }
     if ($live['Defender'].Status -eq 'WARN')   { $recos += @{ Sev='WARN'; Title='Defender ohne PUBG-Exclusion'; Detail='Realtime-Scan auf PUBG-Files kostet I/O. Tweak: "Defender Exclusion"'; TabIdx=1 } }
-    if ($live['FPS-Cap'] -and $live['FPS-Cap'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='FPS-Cap nicht vollstaendig'; Detail='In-Game-Cap auf Display-Based (Monitor-Hz) setzen UND das NVIDIA-Profil anwenden - der scharfe Cap (Hz-3) laeuft ueber den Treiber-Limiter. Tweaks: "PUBG In-Game FPS-Cap" + "NVIDIA PUBG-Profil"'; TabIdx=1 } }
-    if ($live['G-Sync'] -and $live['G-Sync'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='G-Sync nicht aktiviert'; Detail='G-Sync/VRR ist die Voraussetzung fuer tearing-freies Spielen ohne V-Sync-Latenz. Tweak: "G-Sync aktivieren" - danach im Monitor-OSD VRR/Adaptive-Sync einschalten.'; TabIdx=1 } }
+    if ($live['FPS-Cap'] -and $live['FPS-Cap'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='FPS-Cap nicht gesetzt'; Detail='Den Tweak "PUBG In-Game FPS-Cap" anwenden (Monitor-Hz minus Offset). Im Blur-Busters-Preset ist dieser Cap Pflicht, damit der V-Sync-Backstop latenzfrei bleibt.'; TabIdx=1 } }
     if ($live['GPU-Treiber'] -and $live['GPU-Treiber'].Status -eq 'WARN') { $recos += @{ Sev='WARN'; Title='GPU-Treiber aelter als 90 Tage'; Detail='Aktuellen NVIDIA-Treiber via NVIDIA App installieren - neuere Treiber bringen oft Game-Ready-Optimierungen und VRR-/Flip-Fixes. (Manuell - die Suite aktualisiert keine Treiber.)'; TabIdx=0 } }
 
     $ctrls.recoList.Children.Clear()
@@ -2126,7 +2150,7 @@ function Update-StatusGrid {
     }
 
     # Top-Status: nur Tweak-relevante Checks zaehlen, nicht INFO (PUBG/GPU/CPU/Display)
-    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender','FPS-Cap','G-Sync')
+    $tweakKeys = @('HVCI','Energieplan','GameDVR','Monitore','RTSS','Engine.ini','NV Profil','Defender','FPS-Cap')
     $okCount = 0; $totalCount = 0
     foreach ($k in $tweakKeys) {
         if ($live[$k]) {
@@ -2439,7 +2463,7 @@ DiagScript:  $($Global:Suite.DiagScript)  [$diagStatus]
 MMT:         $($Global:Suite.Tools.MMT)
 NPI:         $($Global:Suite.Tools.NPI)
 PresentMon:  $($Global:Suite.Tools.PM)
-NPI-Stamp:   $($Global:Suite.NPIStamp)
+NV-Preset:   $($Global:Suite.NvPresetStamp)
 "@
 $ctrls.tbMonitorPattern.Text = $Global:Suite.MonitorPattern
 $ctrls.tbMonitorPattern.Add_TextChanged({
@@ -3674,6 +3698,44 @@ function Update-GraphicsTab {
 
     # Einzel-Dropdowns auf den aktuellen INI-Stand bringen
     Sync-GraphicsDropdowns
+
+    # NVIDIA-Treiberprofil-Card aktualisieren
+    Update-NvPresetCard
+}
+
+# --- NVIDIA-Treiberprofil (Preset-Dropdown im Grafik-Tab) ------------------
+
+# Aktualisiert die Summary-Anzeige passend zum gewaehlten Preset.
+function Update-NvPresetSummary {
+    if (-not $ctrls.cmbNvPreset -or -not $ctrls.lblNvPresetSummary) { return }
+    $key = Get-CbTag $ctrls.cmbNvPreset
+    $p = $Global:NvPresets | Where-Object { $_.Key -eq $key } | Select-Object -First 1
+    if ($p) { $ctrls.lblNvPresetSummary.Text = $p.Summary }
+    else    { $ctrls.lblNvPresetSummary.Text = '' }
+}
+
+# Liest den angewandten Preset-Status, setzt Statuszeile + Vorauswahl.
+function Update-NvPresetCard {
+    if (-not $ctrls.cmbNvPreset) { return }
+    $st = $null
+    try { $st = Get-NPIPresetStatus } catch {}
+    if ($st -and $st.Applied) {
+        $ctrls.lblNvPresetStatus.Text = "[$($st.Name)]  $($st.Label) - angewandt vor $($st.AgeDays) Tag(en)"
+        $ctrls.lblNvPresetStatus.Foreground = $Global:SuiteColors.StatusOK
+    } else {
+        $ctrls.lblNvPresetStatus.Text = '[--]  kein NVIDIA-Preset angewandt'
+        $ctrls.lblNvPresetStatus.Foreground = $Global:SuiteColors.StatusWarn
+    }
+    # Vorauswahl: angewandtes Preset, sonst Default 'blurbusters' (nur initial,
+    # eine bestehende Nutzer-Auswahl wird nicht ueberschrieben).
+    if ($ctrls.cmbNvPreset.SelectedIndex -lt 0) {
+        $target = if ($st -and $st.Applied -and $st.Name) { $st.Name } else { 'blurbusters' }
+        foreach ($it in $ctrls.cmbNvPreset.Items) {
+            if ([string]$it.Tag -eq $target) { $ctrls.cmbNvPreset.SelectedItem = $it; break }
+        }
+        if ($ctrls.cmbNvPreset.SelectedIndex -lt 0) { $ctrls.cmbNvPreset.SelectedIndex = 0 }
+    }
+    Update-NvPresetSummary
 }
 
 $ctrls.btnGfxRefresh.Add_Click({ Update-GraphicsTab })
@@ -3773,6 +3835,44 @@ $ctrls.btnGfxApplyCustom.Add_Click({
         [System.Windows.MessageBox]::Show("Anwenden fehlgeschlagen:`n`n$($res.Message)`n`nDetails: Logs im Settings-Tab.", 'Grafik', 'OK', 'Warning') | Out-Null
     }
     Update-GraphicsTab
+})
+
+# NVIDIA-Preset: Dropdown-Wechsel aktualisiert die Summary-Anzeige.
+$ctrls.cmbNvPreset.Add_SelectionChanged({ Update-NvPresetSummary })
+
+# NVIDIA-Preset anwenden.
+$ctrls.btnNvPresetApply.Add_Click({
+    $key = Get-CbTag $ctrls.cmbNvPreset
+    if (-not $key) {
+        [System.Windows.MessageBox]::Show('Kein Preset gewaehlt.', 'NVIDIA-Preset', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $p = $Global:NvPresets | Where-Object { $_.Key -eq $key } | Select-Object -First 1
+    $label = if ($p) { $p.Label } else { $key }
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Das NVIDIA-Preset wird via NVIDIA Profile Inspector in die Treiber-Datenbank geschrieben:`n`n$label`n`n" +
+        "NVPI wird bei Bedarf automatisch installiert. Der Vorgang braucht Admin-Rechte und ein paar Sekunden.`n`nFortfahren?",
+        'NVIDIA-Preset anwenden', 'YesNo', 'Question')
+    if ($confirm -ne 'Yes') { return }
+    $ts = Get-Date -Format 'HH:mm:ss'
+    $ctrls.lblNvPresetInfo.Text = 'Wird angewendet - NVIDIA Profile Inspector laeuft (Export -> Import -> Verifikation)...'
+    $ctrls.lblNvPresetInfo.Foreground = $Global:SuiteColors.TextSecondary
+    $res = $null
+    try { $res = Invoke-NPIPreset -Name $key } catch { $res = @{ Success=$false; Message=$_.Exception.Message } }
+    if ($res -and $res.Success) {
+        Write-SuiteLog "NVIDIA-Preset '$key' angewandt - $($res.Message)" 'INFO'
+        $ctrls.lblNvPresetInfo.Text = "Angewendet ($ts) - $($res.Message)"
+        $ctrls.lblNvPresetInfo.Foreground = $Global:SuiteColors.StatusOK
+        $extra = if ($key -eq 'blurbusters') { "`n`nNICHT VERGESSEN: den Tweak 'fpscap' anwenden (FPS-Cap = Monitor-Hz minus 3) - im Blur-Busters-Setup ist der Pflicht." } else { '' }
+        [System.Windows.MessageBox]::Show("NVIDIA-Preset angewandt und im Treiber verifiziert:`n`n$label$extra", 'NVIDIA-Preset', 'OK', 'Information') | Out-Null
+    } else {
+        $msg = if ($res) { $res.Message } else { 'Unbekannter Fehler' }
+        Write-SuiteLog "NVIDIA-Preset '$key' FEHLGESCHLAGEN - $msg" 'ERROR'
+        $ctrls.lblNvPresetInfo.Text = "Fehlgeschlagen ($ts) - $msg"
+        $ctrls.lblNvPresetInfo.Foreground = $Global:SuiteColors.StatusError
+        [System.Windows.MessageBox]::Show("Anwenden fehlgeschlagen:`n`n$msg`n`nDetails: Logs im Settings-Tab.", 'NVIDIA-Preset', 'OK', 'Warning') | Out-Null
+    }
+    Update-NvPresetCard
 })
 
 # ==================== CAPTURE TAB ====================
@@ -4635,6 +4735,9 @@ try {
 Update-StatusGrid
 Update-TweaksTab
 Update-GraphicsTab
+# NVIDIA-Preset-Card explizit initialisieren - Update-GraphicsTab bricht bei
+# fehlendem esportgfx-Profil frueh ab, die NVIDIA-Card haengt da nicht dran.
+Update-NvPresetCard
 
 # Cleanup beim Schliessen - Timer stoppen, ggf. laufenden PresentMon killen
 $window.Add_Closing({

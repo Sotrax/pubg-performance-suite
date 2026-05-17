@@ -17,7 +17,7 @@ Drei Dinge sollten dir klar sein **bevor** du etwas applist:
 3. **BattlEye-safe by design**. Bewusst ausgeschlossen (siehe [Safety](#safety)): Special K, ReShade, DXVK, ban-bait Engine.ini CVars, Process-Lasso auf BEService.exe. Jeder Tweak veraendert entweder Windows-OS-Settings, User-AppData oder User-controllable PUBG-Settings - **keiner haengt sich an den TslGame.exe-Prozess**.
 
 **Was die Suite NICHT tut:** Keine Telemetrie, keine Cloud-Calls, keine "Phone home"-Logik. Internet-Traffic nur:
-- One-time NPI-Download von `github.com/Orbmu2k/nvidiaProfileInspector` (nur wenn NV-Profile-Tweak applied wird)
+- One-time NPI-Download von `github.com/Orbmu2k/nvidiaProfileInspector` (nur wenn ein NVIDIA-Preset angewendet wird)
 - One-time MMT-Download von `nirsoft.net` (nur wenn Game Mode benutzt wird)
 - One-time PresentMon-Download von `github.com/GameTechDev/PresentMon` (nur wenn Capture-Tab benutzt wird)
 - ICMP-Pings (`1.1.1.1`, `8.8.8.8`, `steamcommunity.com`) waehrend Diagnose
@@ -64,7 +64,7 @@ Diese Suite **erkennt alle live**, laesst dich **per Tweak einzeln applien** mit
 - Engine.ini Tweaks: Sharpening 0.7, Streaming PoolSize 4096, Frame-Pacing CVars, `r.D3D11.UseAllowTearing=1`. Datei wird nach Apply Read-Only damit PUBG sie nicht beim Spielstart ueberschreibt
 - Esport-Grafik (Competitive-Profil): schreibt das In-Game-Grafikmenue in `GameUserSettings.ini` - Exklusiv-Vollbild, Sicht-Blocker (Schatten/Post/Effekte/Laub) niedrig, Spotting-Klarheit (AA/Texturen) mittel-hoch, V-Sync + Motion Blur aus. Aufloesung bleibt unangetastet, alle Werte menue-konform (BattlEye-safe)
 - PUBG FPS-Cap = Monitor-Hz minus 3 (dynamisch berechnet aus Primary-Display)
-- NVIDIA PUBG-Profil via NPI (Low Latency, Power Max, Threaded Optimization etc.) - NPI wird auto-installiert wenn fehlt
+- NVIDIA-Treiberprofil via Grafik-Tab: waehlbare, validierte Presets (Blur Busters = G-Sync + V-Sync tearing-frei / Real Competitive = G-Sync aus, max. latenzfrei). Ein Klick schreibt Power Mgmt, Texture Filtering, G-Sync + V-Sync via NPI - NPI wird auto-installiert wenn fehlt
 
 **System / Admin (7)**
 - Defender Exclusion fuer PUBG-Pfad
@@ -171,7 +171,7 @@ Das laedt herunter, installiert nach `%LOCALAPPDATA%\PUBGSuite\app\`, legt einen
 
 Jeder Apply captured einen **Pre-Change-Snapshot** (Registry-Werte mit Type, File-Copies, Service-States) in `history.json`. Der Apply-Button transformiert nach Erfolg in einen orangenen **Revert**-Button. Klick darauf restored den Pre-Apply-State.
 
-Revert ist unterstuetzt fuer **15 von 16 Tweaks** (NVIDIA-Profile nutzt NPIs eigene Reset-Funktion - derzeit kein automatisierter Revert in der Suite).
+Revert ist unterstuetzt fuer **alle Tweaks**. Das NVIDIA-Treiberprofil liegt nicht in der Tweak-Liste, sondern als Preset-Dropdown im Grafik-Tab (Read-Modify-Write via NPI).
 
 ## Architektur
 
