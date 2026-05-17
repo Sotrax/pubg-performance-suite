@@ -10,6 +10,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.32.0-beta] - 2026-05-17
+Stabilisiert den NVIDIA-Apply-Pfad und macht das Treiberprofil transparent:
+die Settings landen nachweislich im PUBG-App-Profil (`TslGame.exe`).
+
+### Fixed
+- **CRITICAL: NVIDIA-Apply meldete auf NVPI v3.x dauerhaft `FEHLGESCHLAGEN`.**
+  Die Verifikation in `Test-NpiChangesApplied` verglich den rohen `.nip`-Wert
+  als String gegen einen Dezimal-String. NPI v2.x exportiert `.nip`-Werte
+  dezimal (`1`), v3.x als Hex (`0x00000001`) — der String-Vergleich schlug
+  damit immer fehl, obwohl der Import lief. Neue Helper-Funktion
+  `ConvertTo-UInt32Smart` parst format-unabhängig (hex `0x`/`0X`, dezimal, leer)
+  und Soll/Ist werden jetzt als `uint32` verglichen. `ConvertFrom-NpiHex`
+  strippte den `0x`-Prefix nur klein geschrieben — ein `0X` hätte `ToUInt32`
+  zum Absturz gebracht; jetzt case-insensitiv. `Read-NipProfiles` normalisiert
+  SettingID-Schlüssel auf Dezimal, damit Lookups format-unabhängig greifen.
+- **`esportgfx` schrieb `FrameRateLimit` und kollidierte mit dem `fpscap`-Tweak.**
+  Beide schrieben denselben INI-Key mit unterschiedlichen Werten — je nach
+  Apply-Reihenfolge gewann ein anderer. `esportgfx` schreibt `FrameRateLimit`
+  nicht mehr; der dedizierte `fpscap`-Tweak ist alleinige Quelle des FPS-Caps.
+
+### Changed
+- **NPI auf die stabile Version `2.4.0.31` gepinnt.** Der Installer zog zuvor
+  die höchste Versionsnummer und damit die v3.x-Pre-Releases (geändertes
+  `.nip`-Format). NPI wird jetzt gezielt auf den gepinnten Tag geholt.
+- **Apply-Pipeline mit per-Setting `try/catch`.** Ein einzelner unparsebarer
+  Wert bricht nicht mehr den ganzen Apply ab; übersprungene Settings werden
+  gezählt und protokolliert. Setting-Änderungen werden als Hex-Diff geloggt.
+- **NVIDIA-Treiberprofil in `config/PUBGNvidiaProfile.psd1` ausgelagert** —
+  Single Source of Truth, geladen via `Import-PowerShellDataFile`. Die
+  SettingIDs bleiben die im Repo verifizierten (0.29.0-beta).
+
+### Added
+- `config/PUBGNvidiaProfile.psd1` — kuratiertes NVIDIA-Profil + Presets.
+- `tests/Test-NpiValueParser.ps1` — Unit-Test des Wert-Parsers (AST-extrahiert
+  die echten Modulfunktionen, plattformunabhängig).
+- UI: NVIDIA-Card und Dashboard zeigen jetzt das Ziel-App-Profil
+  (`PLAYERUNKNOWN'S BATTLEGROUNDS` / `TslGame.exe`) und die Profil-Version.
+
 ## [0.31.0-beta] - 2026-05-17
 Behebt drei Bugs aus dem GUI-Test (Win11, RTX 5080, NVPI v3.0.1.12): der
 NVIDIA-Apply-Pfad (G-Sync + Presets) war komplett tot.
