@@ -28,11 +28,35 @@
 
 $ErrorActionPreference = 'SilentlyContinue'
 
+# ==================== SELF-ELEVATION ====================
+# NVIDIA Profile Inspector laeuft mit 'requireAdministrator' im Manifest und
+# laesst sich nur aus einem bereits erhoehten Prozess starten; ebenso brauchen
+# die HKLM-Registry- und Service-Tweaks Admin-Rechte. launch.ps1 startet zwar
+# erhoeht, der erzeugte Desktop-Shortcut aber nicht - daher hier sicherstellen,
+# dass die Suite IMMER erhoeht laeuft. Wird UAC abgelehnt, laeuft sie
+# nicht-erhoeht weiter (Badge 'Admin: NEIN', Nicht-Admin-Tweaks funktionieren).
+$__suiteIsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $__suiteIsAdmin) {
+    $__suiteSelf = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($__suiteSelf)) { $__suiteSelf = $MyInvocation.MyCommand.Definition }
+    if (-not [string]::IsNullOrWhiteSpace($__suiteSelf) -and (Test-Path -LiteralPath $__suiteSelf)) {
+        $__suitePsExe = try { (Get-Process -Id $PID).Path } catch { $null }
+        if ([string]::IsNullOrWhiteSpace($__suitePsExe)) { $__suitePsExe = 'powershell.exe' }
+        $__suiteArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $__suiteSelf
+        try {
+            Start-Process -FilePath $__suitePsExe -Verb RunAs -ArgumentList $__suiteArgs -ErrorAction Stop
+            exit   # erhoehte Instanz uebernimmt; dieser Prozess endet hier
+        } catch {
+            # UAC abgebrochen/abgelehnt - nicht-erhoeht weiterlaufen.
+        }
+    }
+}
+
 # ==================== KONFIGURATION ====================
 $Global:Suite = @{
     # Fallback - die echte Version steht in der VERSION-Datei (Single Source of
     # Truth, wird direkt unter diesem Block geladen und ueberschreibt diesen Wert).
-    Version    = '0.28.0-beta'
+    Version    = '0.29.0-beta'
     StateDir   = "$env:LOCALAPPDATA\PUBGSuite"
     StateFile  = "$env:LOCALAPPDATA\PUBGSuite\state.json"
     ConfigFile = "$env:LOCALAPPDATA\PUBGSuite\config.json"

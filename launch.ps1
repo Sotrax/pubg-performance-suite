@@ -112,6 +112,14 @@ try {
     $lnk.WorkingDirectory = $InstallDir
     $lnk.Description = 'PUBG Performance Suite'
     $lnk.Save()
+    # 'Als Administrator ausfuehren'-Flag im .lnk setzen (Header-Byte 0x15,
+    # Bit 0x20). Die Suite braucht Admin (NVIDIA Profile Inspector laeuft mit
+    # 'requireAdministrator', dazu die HKLM-/Service-Tweaks). Ohne dieses Flag
+    # startet der Shortcut nicht-erhoeht - die Suite eleviert sich dann zwar
+    # selbst nach, aber mit dem Flag entfaellt der zusaetzliche Neustart.
+    $lnkBytes = [System.IO.File]::ReadAllBytes($ShortcutPath)
+    $lnkBytes[0x15] = $lnkBytes[0x15] -bor 0x20
+    [System.IO.File]::WriteAllBytes($ShortcutPath, $lnkBytes)
 } catch {
     Write-Host "  Shortcut konnte nicht erstellt werden (nicht kritisch): $_" -ForegroundColor Yellow
 }

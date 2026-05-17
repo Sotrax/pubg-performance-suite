@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.29.0-beta] - 2026-05-17
+Behebt zwei voneinander unabhängige Bugs aus dem GUI-Test (Win11, RTX 5080):
+NVIDIA-Treibereinstellungen ließen sich über die Suite nicht ändern.
+
+### Fixed
+- **CRITICAL: 4 von 7 Setting-IDs des NVIDIA-PUBG-Profils waren falsch
+  verdrahtet.** Eine Verifikation gegen die NVPI-Quelle (`NvApiDriverSettings.cs`
+  + `CustomSettingNames.xml`, Orbmu2k) ergab: `0x1033DCD2` (angeblich „Power
+  Management Mode") ist in Wahrheit `SLI_PREDEFINED_GPU_COUNT`; `0x00CE0E32`
+  („Texture Filtering Quality") existiert im Treiber **gar nicht**; `0x20FF7493`
+  („Threaded Optimization") ist `OGL_EXTENSION_STRING_VERSION`; `0x00D55F7D`
+  („AA-Mode") ist die DX9-AA-Kompatibilität. Der alte Kommentar behauptete
+  fälschlich „gegen die NVPI-Referenz verifiziert". Folge: Power Management,
+  Texture Filtering und Threaded Optimization wurden nie gesetzt — und die
+  nicht existierende ID `0x00CE0E32` ließ zusätzlich die Post-Import-
+  Verifikation (seit 0.28) fehlschlagen, sodass der NVIDIA-Apply **selbst mit
+  Admin-Rechten** als „fehlgeschlagen" gemeldet hätte. **Neu:** Alle IDs gegen
+  die NVPI-Quelle verifiziert und korrigiert; das Profil folgt jetzt dem
+  recherchierten Blur-Busters-G-SYNC-101-Setup — Power Management = Prefer
+  maximum performance (`0x1057EB71`), Vertical Sync = Force On (`0x00A879CF`,
+  war bereits korrekt), Texture Filtering Quality = High performance
+  (`0x00CE2691`), Negative LOD Bias = Clamp (`0x0019BB68`), Threaded
+  Optimization = On (`0x20C1221E`), Ultra Low Latency = Off (`0x10835000`, war
+  korrekt), Shader Cache Size = 10 GB (`0x00AC8497`), Preferred Refresh Rate =
+  Highest available (`0x0064B541`). Die G-Sync-IDs (`0x1094F157/F1F7`,
+  `0x1194F158`, `0x10A879CF`) wurden ebenfalls geprüft — sie waren korrekt.
+- **CRITICAL: Die NVIDIA-Tweaks (`nvprofile`, `gsync`) scheiterten, sobald die
+  Suite nicht-erhöht lief.** NVIDIA Profile Inspector trägt
+  `requireAdministrator` im Manifest und lässt sich nur aus einem bereits
+  erhöhten Prozess starten. Die Suite startete NVPI per
+  `Start-Process … -RedirectStandardOutput/-Error`, was `UseShellExecute=false`
+  erzwingt — in diesem Modus verarbeitet Windows das Elevation-Manifest nicht,
+  und der Start einer `requireAdministrator`-EXE aus einem nicht-erhöhten
+  Prozess schlägt mit „requires elevation" (Win32-Fehler 740) fehl. Die Suite
+  elevierte sich selbst nie; `launch.ps1` startet zwar erhöht, der von ihm
+  erzeugte Desktop-Shortcut war aber **nicht** als „Als Administrator
+  ausführen" markiert — jeder Start nach der Erstinstallation lief damit
+  nicht-erhöht, und NVPI ließ sich grundsätzlich nicht starten. Dieselbe
+  Ursache traf auch die HKLM-Registry- und Service-Tweaks. **Neu:** Die Suite
+  prüft beim Start auf Admin-Rechte und startet sich bei Bedarf via UAC erhöht
+  neu (`-Verb RunAs`); wird UAC abgelehnt, läuft sie nicht-erhöht weiter
+  (Badge „Admin: NEIN", Nicht-Admin-Tweaks funktionieren). Zusätzlich setzt
+  `launch.ps1` das „Als Administrator"-Flag im Desktop-Shortcut (Header-Byte
+  `0x15`, Bit `0x20`), sodass der Shortcut direkt erhöht startet.
+
 ## [0.28.0-beta] - 2026-05-17
 Behebt alle 7 Bugs aus `BUGREPORT_v0.27.0-beta_DIAG_VERIFIED.md` (Diag-Bundle
 `pubg-suite-diag-20260516`).

@@ -56,36 +56,39 @@ $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 # Apply (Invoke-NPIPubgProfile) und Revert (Revert-NPIPubgProfile) GENAU dieselbe
 # Liste nutzen - eine einzige Quelle fuer Setzen und Zuruecksetzen.
 #
-# Setting-IDs + Werte gegen die offizielle nvidiaProfileInspector-Referenz
-# verifiziert (nvidiaProfileInspector/CustomSettingNames.xml, Orbmu2k):
-#   0x00A879CF = Vertical Sync           (Off=0x08416747, On=0x47814940)
-#   0x10835000 = Ultra Low Latency       (Bool: 0=Off, 1=On)
+# Setting-IDs + Werte am 2026-05-17 gegen die NVPI-Quelle verifiziert:
+#   - predefined IDs: NvApiDriverSettings.cs (Orbmu2k/nvidiaProfileInspector)
+#   - Wert-Enums:     CustomSettingNames.xml (dieselbe Quelle)
+# Jede ID + jeder Wert unten ist dort 1:1 belegt.
 #
-# Aenderungen ggue. <=0.26.0-beta (G-SYNC-101-konform, doppelt recherchiert):
-#  - Vertical Sync: war 0x00000000 (KEIN gueltiger Wert fuer dieses Setting!) ->
-#    0x47814940 (On). Bei aktivem G-Sync + FPS-Cap unter Refresh fuegt V-Sync=On
-#    KEINE Latenz hinzu, dient nur als Tearing-Fallback (Blur Busters G-SYNC 101).
-#  - Ultra Low Latency: war 1 (On) -> 0 (Off). PUBG hat keinen Reflex; der
-#    manuelle FPS-Cap ist wirksamer als ULL. ULL Ultra setzt zudem einen eigenen
-#    Auto-Cap (~224 FPS @240Hz), der den ini-Cap unterbieten wuerde, und kann
-#    in CPU-bound Szenen (PUBG) Latenz sogar erhoehen.
-#  - CPL-State 0x0005F543 entfernt (mit ULL=Off gegenstandslos).
+# ACHTUNG - bis einschliesslich 0.28.0-beta waren hier 4 von 7 IDs FALSCH
+# verdrahtet (der alte Kommentar behauptete faelschlich "verifiziert"):
+#   0x1033DCD2 war in Wahrheit SLI_PREDEFINED_GPU_COUNT (nicht Power Mgmt)
+#   0x00CE0E32 existiert im Treiber GAR NICHT (frei erfundene ID)
+#   0x20FF7493 war OGL_EXTENSION_STRING_VERSION (nicht Threaded Optimization)
+#   0x00D55F7D war Antialiasing-Compatibility-DX9 (nicht AA-Mode)
+# Folge: Power/Texture/Threaded wurden nie gesetzt, und 0x00CE0E32 liess sogar
+# die Post-Import-Verifikation fehlschlagen. Ab 0.29.0-beta korrigiert.
 #
-# Aenderung ggue. 0.27.0-beta: Frame Rate Limiter V3 (0x10835002) ENTFERNT.
-# Der Competitive-FPS-Cap wird seit 0.28.0-beta vom Tweak 'fpscap' direkt in
-# PUBGs GameUserSettings.ini geschrieben (FrameRateLimit + InGameCustom-
-# FrameRateLimit). Diag-Bundle pubg-suite-diag-20260516 hat belegt, dass der
-# NVPI-Pfad auf aktuellen Treibern wirkungslos ist; der ini-Cap ist die
-# verifizierte, einzige Quelle des Caps - kein doppelter Mechanismus.
+# Sync-Philosophie: Blur-Busters-G-SYNC-101-Setup (vom Nutzer gewaehlt). G-Sync
+# an (Tweak 'gsync') + Vertical Sync (NVCP) = 'Force On' als Tearing-Backstop.
+# ENTSCHEIDEND: der V-Sync-Backstop bleibt nur latenzfrei, solange die FPS unter
+# der Refreshrate gedeckelt sind - das leistet der Tweak 'fpscap' (Refresh-3 in
+# PUBGs GameUserSettings.ini). Ohne diesen Cap greift V-Sync REAL und bringt die
+# volle V-Sync-Latenz. Der manuelle Cap ist daher PFLICHT, nicht optional - es
+# gibt KEINEN brauchbaren Auto-Cap: PUBG hat kein NVIDIA Reflex, und der einzige
+# Treiber-Auto-Cap (Low Latency Mode = Ultra) ist laut Blur Busters dem manuellen
+# Cap unterlegen -> Ultra Low Latency bleibt deshalb Off.
 $script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
 $script:NpiPubgSettings = @(
-    @{ Id='0x1033DCD2'; Val='0x00000001'; Desc='Power Management Mode = Prefer Max Performance' }
-    @{ Id='0x00A879CF'; Val='0x47814940'; Desc='Vertical Sync = ON (G-SYNC-101: Tearing-Fallback, keine Latenz bei Cap unter Refresh)' }
-    @{ Id='0x00CE0E32'; Val='0x00000000'; Desc='Texture Filtering Quality = High Performance' }
-    @{ Id='0x20FF7493'; Val='0x00000001'; Desc='Threaded Optimization = ON' }
-    @{ Id='0x10835000'; Val='0x00000000'; Desc='Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer)' }
-    @{ Id='0x00D55F7D'; Val='0x00000000'; Desc='Antialiasing Mode = Application Controlled' }
-    @{ Id='0x101E61A9'; Val='0x00000002'; Desc='Anisotropic Filtering = Use Global' }
+    @{ Id='0x1057EB71'; Val='0x00000001'; Desc='Power Management Mode = Prefer maximum performance' }
+    @{ Id='0x00A879CF'; Val='0x47814940'; Desc='Vertical Sync = Force On (G-SYNC-101 Tearing-Backstop; latenzfrei nur mit aktivem fpscap-Cap unter Refresh)' }
+    @{ Id='0x00CE2691'; Val='0x00000014'; Desc='Texture Filtering - Quality = High performance' }
+    @{ Id='0x0019BB68'; Val='0x00000001'; Desc='Texture Filtering - Negative LOD Bias = Clamp' }
+    @{ Id='0x20C1221E'; Val='0x00000001'; Desc='Threaded Optimization = On' }
+    @{ Id='0x10835000'; Val='0x00000000'; Desc='Ultra Low Latency = Off (manueller fpscap-Cap ist wirksamer als der ULL-Ultra-Auto-Cap)' }
+    @{ Id='0x00AC8497'; Val='0x00002800'; Desc='Shader Cache Size = 10 GB (gegen Shader-Compile-Stutter / Frametime-Spikes)' }
+    @{ Id='0x0064B541'; Val='0x00000001'; Desc='Preferred Refresh Rate = Highest available' }
 )
 
 # G-Sync-Settings (eigener Tweak). IDs + Werte gegen die nvidiaProfileInspector-
@@ -1623,12 +1626,16 @@ $script:PUBGTweaks = @(
         Changes=@(
             'Tool: NVIDIA Profile Inspector (Auto-Install nach C:\Tools\nvidiaProfileInspector\)',
             "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS (TslGame.exe)",
-            'Power Management Mode = Prefer Max Performance',
-            'Vertical Sync = ON (G-SYNC-101: Tearing-Fallback, keine Latenz solange Cap unter Refresh)',
-            'Texture Filtering Quality = High Performance',
-            'Threaded Optimization = ON',
-            'Ultra Low Latency = Off (manueller FPS-Cap ist wirksamer; ULL kann CPU-bound Latenz erhoehen)',
-            'KEIN FPS-Cap hier - der Competitive-Cap kommt vom Tweak "fpscap" (GameUserSettings.ini)',
+            'Power Management Mode = Prefer maximum performance',
+            'Vertical Sync = Force On (G-SYNC-101 Tearing-Backstop - latenzfrei nur mit aktivem fpscap-Cap)',
+            'Texture Filtering - Quality = High performance',
+            'Texture Filtering - Negative LOD Bias = Clamp',
+            'Threaded Optimization = On',
+            'Ultra Low Latency = Off (manueller fpscap-Cap ist wirksamer als der ULL-Ultra-Auto-Cap)',
+            'Shader Cache Size = 10 GB (gegen Shader-Compile-Stutter)',
+            'Preferred Refresh Rate = Highest available',
+            'KEIN FPS-Cap hier - der Competitive-Cap (Refresh-3) kommt vom Tweak "fpscap"; er ist im',
+            'G-SYNC-101-Setup PFLICHT, damit der V-Sync-Backstop nicht real greift',
             'Mechanik: .nip-Datei generieren + nvidiaProfileInspector -silentImport (Read-Modify-Write)',
             'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp'
         )
