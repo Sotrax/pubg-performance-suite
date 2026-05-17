@@ -757,7 +757,11 @@ function Test-NpiChangesApplied {
                 }
             }
         }
-        if ($ch.Remove) {
+        # ContainsKey, NICHT $ch.Remove: $ch ist eine [hashtable], und 'Remove'
+        # ist ein Methodenname der Hashtable. Fehlt der Remove-Key, liefert
+        # $ch.Remove die Methoden-Referenz (truthy) statt $null - die foreach
+        # iteriert dann den PSMethod statt nichts.
+        if ($ch.ContainsKey('Remove')) {
             foreach ($hid in $ch.Remove) {
                 $idDec = [string](ConvertFrom-NpiHex $hid)
                 if ($prof -and $prof.Settings.ContainsKey($idDec)) {
@@ -838,11 +842,16 @@ function Set-NpiProfileSettings {
                 }
             }
         }
-        if ($ch.Remove) {
+        # ContainsKey, NICHT $ch.Remove: $ch ist eine [hashtable], 'Remove' ist
+        # ein Hashtable-Methodenname. Ohne Remove-Key liefert $ch.Remove die
+        # Methoden-Referenz (truthy) - die foreach iterierte sonst den PSMethod,
+        # dessen ToString 'void Remove(System.Object key), ...' ist und in
+        # ConvertFrom-NpiHex als unparsebarer Hex-Wert scheiterte.
+        if ($ch.ContainsKey('Remove')) {
             foreach ($hid in $ch.Remove) {
                 try {
                     $idDec = [string](ConvertFrom-NpiHex $hid)
-                    if ($settings.ContainsKey($idDec)) { $settings.Remove($idDec) }
+                    if ($settings.ContainsKey($idDec)) { [void]$settings.Remove($idDec) }
                 } catch {
                     $failed += "$hid ($($_.Exception.Message))"
                     Write-RegLog "NPI '$pname' Remove ${hid}: uebersprungen - $($_.Exception.Message)" 'ERROR'
