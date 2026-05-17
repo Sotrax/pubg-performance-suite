@@ -48,8 +48,7 @@ if ([string]::IsNullOrWhiteSpace($script:RegLocalAppData)) {
 }
 $script:RegBackupDir  = Join-Path $script:RegLocalAppData 'PUBGSuite\backups'
 $script:RegLogDir     = Join-Path $script:RegLocalAppData 'PUBGSuite\logs'
-$script:NpiStampPath  = Join-Path $script:RegLocalAppData 'PUBGDiag\npi-applied.stamp'
-$script:GSyncStampPath = Join-Path $script:RegLocalAppData 'PUBGDiag\gsync-applied.stamp'
+$script:NpiPresetStamp = Join-Path $script:RegLocalAppData 'PUBGDiag\nvpreset.stamp'
 $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 
 # NVIDIA PUBG-Profil: Profilname + die Treiber-Settings. Modul-Scope, damit
@@ -70,19 +69,15 @@ $script:NpiDefaultDir = 'C:\Tools\nvidiaProfileInspector'
 # Folge: Power/Texture/Threaded wurden nie gesetzt, und 0x00CE0E32 liess sogar
 # die Post-Import-Verifikation fehlschlagen. Ab 0.29.0-beta korrigiert.
 #
-# Sync-Philosophie: Blur-Busters-G-SYNC-101-Setup (vom Nutzer gewaehlt). G-Sync
-# an (Tweak 'gsync') + Vertical Sync (NVCP) = 'Force On' als Tearing-Backstop.
-# ENTSCHEIDEND: der V-Sync-Backstop bleibt nur latenzfrei, solange die FPS unter
-# der Refreshrate gedeckelt sind - das leistet der Tweak 'fpscap' (Refresh-3 in
-# PUBGs GameUserSettings.ini). Ohne diesen Cap greift V-Sync REAL und bringt die
-# volle V-Sync-Latenz. Der manuelle Cap ist daher PFLICHT, nicht optional - es
-# gibt KEINEN brauchbaren Auto-Cap: PUBG hat kein NVIDIA Reflex, und der einzige
-# Treiber-Auto-Cap (Low Latency Mode = Ultra) ist laut Blur Busters dem manuellen
-# Cap unterlegen -> Ultra Low Latency bleibt deshalb Off.
+# NpiPubgSettings = der PRESET-UNABHAENGIGE Basis-Block des PUBG-Treiberprofils.
+# Diese Werte sind in BEIDEN Presets identisch. Was die Presets unterscheidet
+# (Vertical Sync + G-Sync), steht in $script:NpiPresets weiter unten - NICHT
+# hier. Ultra Low Latency bleibt in beiden Presets Off: PUBG hat kein NVIDIA
+# Reflex, und der einzige Treiber-Auto-Cap (Low Latency Mode = Ultra) ist laut
+# Blur Busters dem manuellen fpscap-Cap unterlegen.
 $script:NpiPubgProfileName = "PLAYERUNKNOWN'S BATTLEGROUNDS"
 $script:NpiPubgSettings = @(
     @{ Id='0x1057EB71'; Val='0x00000001'; Desc='Power Management Mode = Prefer maximum performance' }
-    @{ Id='0x00A879CF'; Val='0x47814940'; Desc='Vertical Sync = Force On (G-SYNC-101 Tearing-Backstop; latenzfrei nur mit aktivem fpscap-Cap unter Refresh)' }
     @{ Id='0x00CE2691'; Val='0x00000014'; Desc='Texture Filtering - Quality = High performance' }
     @{ Id='0x0019BB68'; Val='0x00000001'; Desc='Texture Filtering - Negative LOD Bias = Clamp' }
     @{ Id='0x20C1221E'; Val='0x00000001'; Desc='Threaded Optimization = On' }
@@ -91,7 +86,7 @@ $script:NpiPubgSettings = @(
     @{ Id='0x0064B541'; Val='0x00000001'; Desc='Preferred Refresh Rate = Highest available' }
 )
 
-# G-Sync-Settings (eigener Tweak). IDs + Werte gegen die nvidiaProfileInspector-
+# G-Sync-Settings. IDs + Werte gegen die nvidiaProfileInspector-
 # Referenz (CustomSettingNames.xml) verifiziert:
 #   0x1094F157 GSYNC Global Feature    (0=Off, 1=On)
 #   0x1094F1F7 GSYNC Global Mode       (0=Off, 1=Fullscreen only, 2=FS+Windowed)
@@ -112,6 +107,39 @@ $script:NpiGSyncAppSettings = @(
     @{ Id='0x10A879CF'; Val='0x00000000'; Desc='G-SYNC Application State = Allow' }
 )
 $script:NpiBaseProfileName = 'Base Profile'   # globales Treiberprofil in der .nip
+
+# ---------------------------------------------------------------------------
+#  NVIDIA-PRESETS - zwei validierte, in sich kohaerente Competitive-Setups
+# ---------------------------------------------------------------------------
+# Jedes Preset = Basis-Block ($NpiPubgSettings) + ein Sync-Block. Der Sync-Block
+# ist der EINZIGE Unterschied zwischen den Presets:
+#
+#  blurbusters  - Blur-Busters-G-SYNC-101-Schule: G-Sync an + Vertical Sync
+#                 (NVCP) 'Force On' als Tearing-Backstop. Tearing-frei.
+#                 PFLICHT-Begleiter: der fpscap-Tweak (Refresh-3) - nur ein Cap
+#                 unter der Refreshrate haelt den V-Sync-Backstop latenzfrei.
+#                 Ohne Cap greift V-Sync REAL = volle V-Sync-Latenz.
+#  competitive  - Pro-Schule: G-Sync UND V-Sync komplett aus. Niedrigste
+#                 Input-Latenz, dafuer etwas Tearing. FPS uncapped oder Cap bei
+#                 ~80 % der stabil erreichbaren FPS.
+#
+# Vertical-Sync-Werte (Setting 0x00A879CF, gegen CustomSettingNames.xml geprueft):
+#   0x47814940 = Force on    0x08416747 = Force off
+$script:NpiVSyncId = '0x00A879CF'
+$script:NpiPresets = [ordered]@{
+    blurbusters = @{
+        Label   = 'Blur Busters - G-Sync + V-Sync (tearing-frei)'
+        Summary = 'G-Sync an, Vertical Sync (NVCP) = Force On als Tearing-Backstop. Tearing-frei bei minimaler Latenz INNERHALB des VRR-Fensters. WICHTIG: zusaetzlich den Tweak "fpscap" anwenden (Refresh-3) - der ist hier Pflicht, sonst greift V-Sync real.'
+        VSync   = '0x47814940'   # Force on
+        GSync   = $true
+    }
+    competitive = @{
+        Label   = 'Real Competitive - G-Sync aus (max. latenzfrei)'
+        Summary = 'G-Sync und V-Sync komplett aus. Absolut niedrigste Input-Latenz, dafuer sichtbares Tearing. Passend, wenn die FPS dauerhaft deutlich ueber der Monitor-Hz liegen. FPS-Cap: uncapped oder ~80 % der stabilen FPS.'
+        VSync   = '0x08416747'   # Force off
+        GSync   = $false
+    }
+}
 
 # ===========================================================================
 #  PRIVATE HELFER
@@ -760,67 +788,103 @@ function Set-NpiProfileSettings {
     return @{ Success=$true; Message="NVIDIA-Profil(e) importiert und im Treiber verifiziert (ExitCode $rc)"; Backup=$backup }
 }
 
-# --- High-Level Apply/Revert (von den Tweaks aufgerufen) -------------------
+# --- High-Level Preset-API (von der Suite aufgerufen, exportiert) ----------
+# Diese drei Funktionen sind die oeffentliche NVIDIA-Schnittstelle der Suite.
+# Get-NPIPath / Install-NPIFromGitHub sind modul-privat und werden hier intern
+# aufgeloest - die Suite muss keinen NPI-Pfad kennen.
 
-function Invoke-NPIPubgProfile {
-    param([string]$NpiPath)
-    $setMap = @{}
-    foreach ($s in $script:NpiPubgSettings) { $setMap[$s.Id] = $s.Val }
-    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
-        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$setMap }
-    )
+# Wendet ein NVIDIA-Preset an: PUBG-Treiberprofil (Basis-Block + Vertical Sync
+# des Presets) + G-Sync-Master-Schalter im Base-Profil entsprechend dem Preset.
+function Invoke-NPIPreset {
+    param([Parameter(Mandatory)][string]$Name)
+    $preset = $script:NpiPresets[$Name]
+    if (-not $preset) { return @{ Success=$false; Message="Unbekanntes NVIDIA-Preset: '$Name'" } }
+
+    $npi = Get-NPIPath
+    if (-not $npi) {
+        $npi = Install-NPIFromGitHub
+        if (-not $npi) { return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht installiert werden' } }
+    }
+
+    # PUBG-Profil: preset-unabhaengiger Basis-Block + Vertical Sync des Presets.
+    $pubgMap = @{}
+    foreach ($s in $script:NpiPubgSettings) { $pubgMap[$s.Id] = $s.Val }
+    $pubgMap[$script:NpiVSyncId] = $preset.VSync
+
+    $changes = @()
+    if ($preset.GSync) {
+        # G-Sync AN: Master-Schalter ins Base-Profil, G-Sync-App-Settings ins
+        # PUBG-Profil.
+        $baseMap = @{}
+        foreach ($s in $script:NpiGSyncBaseSettings) { $baseMap[$s.Id] = $s.Val }
+        foreach ($s in $script:NpiGSyncAppSettings)  { $pubgMap[$s.Id] = $s.Val }
+        $changes += @{ Profile=$script:NpiBaseProfileName; Exe=$null; Set=$baseMap }
+    } else {
+        # G-Sync AUS: Master-Schalter (Global Feature + Mode) und der G-Sync
+        # Application Mode des PUBG-Profils explizit auf Off.
+        $changes += @{ Profile=$script:NpiBaseProfileName; Exe=$null; Set=@{
+            '0x1094F157'='0x00000000'; '0x1094F1F7'='0x00000000' } }
+        $pubgMap['0x1194F158'] = '0x00000000'
+    }
+    $changes += @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$pubgMap }
+
+    $res = Set-NpiProfileSettings -NpiPath $npi -Changes $changes
     if ($res.Success) {
         try {
-            $sd = Split-Path $script:NpiStampPath -Parent
+            $sd = Split-Path $script:NpiPresetStamp -Parent
             if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
-            Get-Date | Out-File $script:NpiStampPath -Force
+            Set-Content -Path $script:NpiPresetStamp -Value $Name -Encoding UTF8 -Force
         } catch {}
+        $res.Message = "NVIDIA-Preset '$($preset.Label)' angewandt und im Treiber verifiziert."
     }
     return $res
 }
 
-function Revert-NPIPubgProfile {
-    param([string]$NpiPath)
-    $ids = @($script:NpiPubgSettings | ForEach-Object { $_.Id })
-    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
-        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Remove=$ids }
-    )
-    if ($res.Success -and (Test-Path $script:NpiStampPath)) {
-        Remove-Item $script:NpiStampPath -Force -ErrorAction SilentlyContinue
+# Liefert den aktuell angewandten Preset-Status (aus dem Stamp-File).
+# Rueckgabe: @{ Applied; Name; Label; AgeDays }
+function Get-NPIPresetStatus {
+    if (-not (Test-Path $script:NpiPresetStamp)) {
+        return @{ Applied=$false; Name=$null; Label='kein Preset angewandt'; AgeDays=$null }
     }
-    return $res
+    $n = ''
+    try { $n = (Get-Content $script:NpiPresetStamp -Raw -ErrorAction Stop).Trim() } catch {}
+    $p = $script:NpiPresets[$n]
+    $age = (Get-Date) - (Get-Item $script:NpiPresetStamp).LastWriteTime
+    return @{
+        Applied = $true
+        Name    = $n
+        Label   = if ($p) { $p.Label } else { $n }
+        AgeDays = [int]$age.TotalDays
+    }
 }
 
-function Invoke-NPIGSync {
-    param([string]$NpiPath)
-    $baseMap = @{}; foreach ($s in $script:NpiGSyncBaseSettings) { $baseMap[$s.Id] = $s.Val }
-    $appMap  = @{}; foreach ($s in $script:NpiGSyncAppSettings)  { $appMap[$s.Id]  = $s.Val }
-    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
-        @{ Profile=$script:NpiBaseProfileName; Exe=$null; Set=$baseMap }
-        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Set=$appMap }
-    )
-    if ($res.Success) {
-        try {
-            $sd = Split-Path $script:GSyncStampPath -Parent
-            if (-not (Test-Path $sd)) { New-Item -Path $sd -ItemType Directory -Force | Out-Null }
-            Get-Date | Out-File $script:GSyncStampPath -Force
-        } catch {}
+# Setzt alle von den Presets gesetzten Profil-Werte zurueck (Treiber-Default).
+function Revert-NPIPreset {
+    $npi = Get-NPIPath
+    if (-not $npi) {
+        return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - Profil-Werte manuell via NVIDIA-Systemsteuerung zuruecksetzen' }
     }
-    return $res
-}
-
-function Revert-NPIGSync {
-    param([string]$NpiPath)
-    $baseIds = @($script:NpiGSyncBaseSettings | ForEach-Object { $_.Id })
-    $appIds  = @($script:NpiGSyncAppSettings  | ForEach-Object { $_.Id })
-    $res = Set-NpiProfileSettings -NpiPath $NpiPath -Changes @(
+    $pubgIds  = @($script:NpiPubgSettings | ForEach-Object { $_.Id })
+    $pubgIds += $script:NpiVSyncId
+    $pubgIds += @($script:NpiGSyncAppSettings | ForEach-Object { $_.Id })
+    $baseIds  = @($script:NpiGSyncBaseSettings | ForEach-Object { $_.Id })
+    $res = Set-NpiProfileSettings -NpiPath $npi -Changes @(
         @{ Profile=$script:NpiBaseProfileName; Exe=$null; Remove=$baseIds }
-        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Remove=$appIds }
+        @{ Profile=$script:NpiPubgProfileName; Exe='TslGame.exe'; Remove=$pubgIds }
     )
-    if ($res.Success -and (Test-Path $script:GSyncStampPath)) {
-        Remove-Item $script:GSyncStampPath -Force -ErrorAction SilentlyContinue
+    if ($res.Success -and (Test-Path $script:NpiPresetStamp)) {
+        Remove-Item $script:NpiPresetStamp -Force -ErrorAction SilentlyContinue
     }
     return $res
+}
+
+# Liefert die Preset-Liste fuer die UI: @( @{ Key; Label; Summary } )
+function Get-NPIPresetList {
+    $out = @()
+    foreach ($k in $script:NpiPresets.Keys) {
+        $out += @{ Key=$k; Label=$script:NpiPresets[$k].Label; Summary=$script:NpiPresets[$k].Summary }
+    }
+    return $out
 }
 
 # ===========================================================================
@@ -1617,131 +1681,6 @@ $script:PUBGTweaks = @(
         }
     }
 
-    # ---- GPU: NVIDIA PUBG-Profil ---------------------------------------------
-    [PSCustomObject]@{
-        Id='nvprofile'; Category='GPU'; Label='NVIDIA PUBG-Profil (Low Latency, Power Max)'
-        Description='Setzt das PUBG-Treiberprofil via NVIDIA Profile Inspector (.nip-Import): Power Max, Texture/Threading, V-Sync-Fallback. Der FPS-Cap laeuft separat ueber den Tweak "fpscap" (PUBG-eigene INI).'
-        Impact='KEIN'; ImpactDetail='NPI wird bei Bedarf automatisch installiert. Schreibt nur das PUBG-Profil; andere Treiberprofile bleiben unangetastet (Read-Modify-Write).'
-        RequiresAdmin=$true
-        Changes=@(
-            'Tool: NVIDIA Profile Inspector (Auto-Install nach C:\Tools\nvidiaProfileInspector\)',
-            "Profil: PLAYERUNKNOWN'S BATTLEGROUNDS (TslGame.exe)",
-            'Power Management Mode = Prefer maximum performance',
-            'Vertical Sync = Force On (G-SYNC-101 Tearing-Backstop - latenzfrei nur mit aktivem fpscap-Cap)',
-            'Texture Filtering - Quality = High performance',
-            'Texture Filtering - Negative LOD Bias = Clamp',
-            'Threaded Optimization = On',
-            'Ultra Low Latency = Off (manueller fpscap-Cap ist wirksamer als der ULL-Ultra-Auto-Cap)',
-            'Shader Cache Size = 10 GB (gegen Shader-Compile-Stutter)',
-            'Preferred Refresh Rate = Highest available',
-            'KEIN FPS-Cap hier - der Competitive-Cap (Refresh-3) kommt vom Tweak "fpscap"; er ist im',
-            'G-SYNC-101-Setup PFLICHT, damit der V-Sync-Backstop nicht real greift',
-            'Mechanik: .nip-Datei generieren + nvidiaProfileInspector -silentImport (Read-Modify-Write)',
-            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\npi-applied.stamp'
-        )
-        Check={
-            if (Test-Path $script:NpiStampPath) {
-                $age = (Get-Date) - (Get-Item $script:NpiStampPath).LastWriteTime
-                if ($age.TotalDays -lt 60) {
-                    return @{ Status='OK'; CurrentValue="angewandt vor $([int]$age.TotalDays) Tagen"; Detail='' }
-                }
-                return @{ Status='TWEAK'; CurrentValue="angewandt vor $([int]$age.TotalDays) Tagen (>60d)"
-                          Detail='NVIDIA PUBG-Profil erneut anwenden' }
-            }
-            @{ Status='TWEAK'; CurrentValue='nicht angewandt'; Detail='NVIDIA PUBG-Profil anwenden' }
-        }
-        Apply={
-            try {
-                $npi = Get-NPIPath
-                if (-not $npi) {
-                    $npi = Install-NPIFromGitHub
-                    if (-not $npi) { return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht installiert werden'; Snapshot=$null } }
-                }
-                $result = Invoke-NPIPubgProfile -NpiPath $npi
-                if ($result.Success) {
-                    @{ Success=$true; Message='NVIDIA PUBG-Profil angewandt und im Treiber verifiziert (.nip-Import)'
-                       Snapshot=@{ Method='npi-nip'; Backup=$result.Backup; AppliedAt=(Get-Date).ToString('o') } }
-                } else {
-                    @{ Success=$false; Message=$result.Message; Snapshot=$null }
-                }
-            } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
-        }
-        Revert={
-            param($Snapshot)
-            # Read-Modify-Write: exportiert den Ist-Zustand, entfernt nur die vom
-            # Tweak gesetzten Profil-Werte, importiert zurueck. Braucht NPI.
-            $npi = Get-NPIPath
-            if (-not $npi) {
-                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - Profil-Werte manuell via NVIDIA-Systemsteuerung zuruecksetzen' }
-            }
-            $result = Revert-NPIPubgProfile -NpiPath $npi
-            if ($result.Success) {
-                @{ Success=$true; Message='NVIDIA PUBG-Profil zurueckgesetzt (Profil-Werte entfernt -> Treiber-Default)' }
-            } else {
-                @{ Success=$false; Message=$result.Message }
-            }
-        }
-    }
-
-    # ---- GPU: G-Sync aktivieren ----------------------------------------------
-    # Aktiviert G-Sync/VRR: globales 'Base Profile' (= NVCP-Master-Schalter) +
-    # PUBG-Profil. G-Sync ist die Voraussetzung fuer tearing-freies Spielen OHNE
-    # V-Sync-Latenz: zusammen mit dem FPS-Cap unter Refresh (Tweak 'nvprofile')
-    # bleibt die Framerate im VRR-Fenster -> kein Tearing, kein Stutter.
-    [PSCustomObject]@{
-        Id='gsync'; Category='GPU'; Label='G-Sync aktivieren (VRR, tearing-frei)'
-        Description='Aktiviert G-Sync/VRR global + fuer PUBG via NVIDIA Profile Inspector (.nip-Import) - Voraussetzung fuer tearing-freies Spielen ohne V-Sync-Latenz'
-        Impact='KEIN'; ImpactDetail='Benoetigt einen G-Sync-(Compatible-)Monitor mit aktiver VRR/Adaptive-Sync-Einstellung im Monitor-OSD. Setzt das globale Treiberprofil per Read-Modify-Write - vorhandene globale Einstellungen bleiben erhalten.'
-        RequiresAdmin=$true
-        Changes=@(
-            'Tool: NVIDIA Profile Inspector (.nip-Import, Read-Modify-Write)',
-            'Globales Profil (Base Profile = NVCP-Master-Schalter):',
-            '  G-SYNC Global Feature = On, Global Mode = Fullscreen only',
-            "PUBG-Profil (TslGame.exe):",
-            '  G-SYNC Application Mode = Fullscreen only, Application State = Allow',
-            'Stamp-File: %LOCALAPPDATA%\PUBGDiag\gsync-applied.stamp',
-            'Voraussetzung: VRR/Adaptive-Sync muss im Monitor-OSD aktiv sein (kann die Suite nicht setzen)'
-        )
-        Check={
-            if (Test-Path $script:GSyncStampPath) {
-                $age = (Get-Date) - (Get-Item $script:GSyncStampPath).LastWriteTime
-                return @{ Status='OK'; CurrentValue="aktiviert vor $([int]$age.TotalDays) Tagen"
-                          Detail='Bestaetigung: VRR im Monitor-OSD pruefen, G-SYNC-Indikator in der NVIDIA-Systemsteuerung einschalten' }
-            }
-            @{ Status='TWEAK'; CurrentValue='nicht aktiviert'; Detail='G-Sync global + fuer PUBG aktivieren' }
-        }
-        Apply={
-            try {
-                $npi = Get-NPIPath
-                if (-not $npi) {
-                    $npi = Install-NPIFromGitHub
-                    if (-not $npi) { return @{ Success=$false; Message='NVIDIA Profile Inspector konnte nicht installiert werden'; Snapshot=$null } }
-                }
-                $result = Invoke-NPIGSync -NpiPath $npi
-                if ($result.Success) {
-                    @{ Success=$true
-                       Message='G-Sync aktiviert und im Treiber verifiziert (global + PUBG). WICHTIG: im Monitor-OSD VRR/Adaptive-Sync einschalten; zur Kontrolle den G-SYNC-Indikator in der NVIDIA-Systemsteuerung aktivieren.'
-                       Snapshot=@{ Method='npi-nip'; Backup=$result.Backup; AppliedAt=(Get-Date).ToString('o') } }
-                } else {
-                    @{ Success=$false; Message=$result.Message; Snapshot=$null }
-                }
-            } catch { @{ Success=$false; Message="Fehler: $($_.Exception.Message)"; Snapshot=$null } }
-        }
-        Revert={
-            param($Snapshot)
-            $npi = Get-NPIPath
-            if (-not $npi) {
-                return @{ Success=$false; Message='NVIDIA Profile Inspector nicht gefunden - G-Sync-Werte manuell via NVIDIA-Systemsteuerung zuruecksetzen' }
-            }
-            $result = Revert-NPIGSync -NpiPath $npi
-            if ($result.Success) {
-                @{ Success=$true; Message='G-Sync-Profilwerte zurueckgesetzt (global + PUBG auf Treiber-Default)' }
-            } else {
-                @{ Success=$false; Message=$result.Message }
-            }
-        }
-    }
-
     # ---- Windows: Globale Timer-Resolution-Requests --------------------------
     [PSCustomObject]@{
         Id='timerres'; Category='Windows'; Label='Globale Timer-Resolution-Requests: AN'
@@ -1801,4 +1740,4 @@ function Get-PUBGTweakRegistry {
     return $script:PUBGTweaks
 }
 
-Export-ModuleMember -Function Get-PUBGTweakRegistry
+Export-ModuleMember -Function Get-PUBGTweakRegistry, Invoke-NPIPreset, Get-NPIPresetStatus, Revert-NPIPreset, Get-NPIPresetList

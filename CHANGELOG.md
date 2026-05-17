@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.30.0-beta] - 2026-05-17
+Neues Feature: wählbare, validierte NVIDIA-Treiberprofil-Presets im Grafik-Tab.
+
+### Added
+- **NVIDIA-Treiberprofil-Preset-Dropdown im Grafik-Tab.** Statt der zwei
+  getrennten Tweaks `nvprofile` + `gsync` (die sich unkoordiniert anwenden
+  ließen) gibt es jetzt eine eigene Card „NVIDIA-Treiberprofil (Competitive-
+  Preset)" mit zwei in sich kohärenten, gegen die NVPI-Quelle verifizierten
+  Presets:
+  - **Blur Busters** — G-Sync an + Vertical Sync (NVCP) Force On als
+    Tearing-Backstop (G-SYNC-101-Schule). Tearing-frei. Begleit-Pflicht: der
+    `fpscap`-Tweak (Monitor-Hz minus Offset) — ohne Cap greift V-Sync real.
+  - **Real Competitive** — G-Sync und V-Sync komplett aus. Niedrigste
+    Input-Latenz, dafür etwas Tearing.
+  Beide teilen denselben verifizierten Basis-Block (Power Management = Max
+  Performance, Texture Filtering = High performance, Negative LOD Bias = Clamp,
+  Threaded Optimization = On, Ultra Low Latency = Off, Shader Cache = 10 GB,
+  Preferred Refresh = Highest available); der einzige Unterschied ist der
+  Sync-Block (G-Sync + V-Sync). Ein Klick schreibt PUBG-Treiberprofil **und**
+  G-Sync-Master-Schalter in einem `.nip`-Import mit Post-Import-Verifikation.
+
+### Changed
+- **Die Tweaks `nvprofile` + `gsync` wurden entfernt.** Das NVIDIA-Treiber-
+  profil ist jetzt ausschließlich über den Grafik-Tab-Preset-Dropdown
+  erreichbar — analog zum esportgfx-Grafikprofil, das ebenfalls kein Tweak ist.
+  Damit entfällt der bisherige Footgun, V-Sync ohne G-Sync (oder umgekehrt)
+  halb zu konfigurieren. Dashboard-Status „NV Profil" zeigt jetzt das aktive
+  Preset; der separate „G-Sync"-Status entfällt (steckt im Preset).
+
 ## [0.29.0-beta] - 2026-05-17
 Behebt zwei voneinander unabhängige Bugs aus dem GUI-Test (Win11, RTX 5080):
 NVIDIA-Treibereinstellungen ließen sich über die Suite nicht ändern.
