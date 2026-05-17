@@ -515,9 +515,35 @@ function Install-NPIFromGitHub {
 # ===========================================================================
 
 # Hex-String ('0x10835002' / '0xED') -> dezimaler uint (.nip nutzt Dezimalwerte).
+# Leerer/unguelitger Input wird mit KLARER Meldung abgewiesen - sonst wirft
+# [Convert]::ToUInt32 nur das kryptische "keine bekannten Ziffern gefunden".
 function ConvertFrom-NpiHex {
     param([string]$Hex)
-    return [Convert]::ToUInt32(($Hex -replace '^0x',''), 16)
+    $clean = ($Hex -replace '^0x','').Trim()
+    if ([string]::IsNullOrWhiteSpace($clean)) {
+        throw "ConvertFrom-NpiHex: leerer/ungueltiger Hex-Wert '$Hex'"
+    }
+    return [Convert]::ToUInt32($clean, 16)
+}
+
+# Laedt eine XML-Datei encoding-robust in ein XmlDocument. NPI >=3.x exportiert
+# .nip als UTF-16 LE OHNE BOM; XmlDocument.Load(path) scheitert daran mit
+# "Keine Unicodebyte-Reihenfolgemarkierung". Deshalb lesen wir die Bytes selbst,
+# bestimmen das Encoding (BOM oder Heuristik) und laden via LoadXml(string).
+function ConvertTo-NipXmlDocument {
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $encoding =
+        if     ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { [System.Text.Encoding]::Unicode }          # UTF-16 LE + BOM
+        elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { [System.Text.Encoding]::BigEndianUnicode }  # UTF-16 BE + BOM
+        elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { [System.Text.Encoding]::UTF8 }  # UTF-8 + BOM
+        elseif ($bytes.Length -ge 4 -and $bytes[1] -eq 0x00 -and $bytes[3] -eq 0x00) { [System.Text.Encoding]::Unicode }           # UTF-16 LE ohne BOM (NPI v3.x)
+        else { [System.Text.Encoding]::UTF8 }
+    # BOM-Rest / Leading-Whitespace strippen, sonst stolpert LoadXml.
+    $text = $encoding.GetString($bytes).TrimStart([char]0xFEFF, ' ', "`r", "`n", "`t")
+    $doc = New-Object System.Xml.XmlDocument
+    $doc.LoadXml($text)
+    return $doc
 }
 
 # Exportiert alle angepassten Treiberprofile via -exportCustomized.
@@ -582,11 +608,13 @@ function Read-NipProfiles {
     $result = @{}
     if (-not $Path -or -not (Test-Path $Path)) { return $result }
     try {
-        $doc = New-Object System.Xml.XmlDocument
-        $doc.Load($Path)
+        $doc = ConvertTo-NipXmlDocument -Path $Path
     } catch {
-        Write-RegLog "Read-NipProfiles Parse-Fehler: $($_.Exception.Message)" 'WARN'
-        return $result
+        # Hartes Throw statt stummes WARN-Schlucken: eine nicht lesbare .nip darf
+        # den Read-Modify-Write-Zyklus NICHT weiterlaufen lassen - sonst wird mit
+        # leerem Ist-Zustand gemischt (Profil-Reset) bzw. es kracht spaeter in
+        # einer Folge-Exception. Der Aufrufer faengt das ab und bricht sauber ab.
+        throw "Read-NipProfiles: .nip '$Path' nicht lesbar: $($_.Exception.Message)"
     }
     if (-not $doc.ArrayOfProfile) { return $result }
     foreach ($p in @($doc.ArrayOfProfile.Profile)) {
@@ -658,7 +686,11 @@ function Test-NpiChangesApplied {
     if (-not $exp.Fresh -or -not $exp.Path) {
         return @{ Verified=$false; Detail='NVPI erzeugte nach dem Import kein angepasstes Profil - Import vermutlich wirkungslos' }
     }
-    $now = Read-NipProfiles -Path $exp.Path
+    try {
+        $now = Read-NipProfiles -Path $exp.Path
+    } catch {
+        return @{ Verified=$false; Detail="Verifikations-Export nicht lesbar: $($_.Exception.Message)" }
+    }
     foreach ($ch in $Changes) {
         $pname = [string]$ch.Profile
         $prof  = if ($now.ContainsKey($pname)) { $now[$pname] } else { $null }
@@ -705,7 +737,20 @@ function Set-NpiProfileSettings {
     }
     $backup = $export.Path
     if ($backup) {
-        $current = Read-NipProfiles -Path $backup
+        # Ist-Zustand lesen. Schlaegt das fehl, MUSS abgebrochen werden: der
+        # Import resettet jedes .nip-Profil und schreibt nur die .nip-Settings -
+        # ohne lesbaren Ist-Zustand wuerden die uebrigen Profil-Settings des
+        # Users geloescht. Sauberer Abbruch statt Folge-Exception/Profil-Reset.
+        try {
+            $current = Read-NipProfiles -Path $backup
+        } catch {
+            Write-RegLog "NPI: Ist-Zustand nicht lesbar - Apply abgebrochen: $($_.Exception.Message)" 'ERROR'
+            return @{ Success=$false
+                      Message=('Der NVIDIA-Profil-Export konnte nicht gelesen werden (Encoding/Format). ' +
+                               'Apply abgebrochen - es wurde nichts geaendert. Bitte NVPI aktualisieren ' +
+                               'oder die Einstellung manuell in der NVIDIA-Systemsteuerung setzen. Details im Suite-Log.')
+                      Backup=$backup }
+        }
     } else {
         # ExitCode 0, keine Datei: -exportCustomized exportiert nur ANGEPASSTE
         # Profile - es gibt also noch keine. Sicherer Fall: nichts zu bewahren,

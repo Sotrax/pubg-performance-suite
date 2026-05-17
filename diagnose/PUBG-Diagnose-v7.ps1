@@ -117,7 +117,9 @@ $Global:TweakRegistryLoaded = $false
 $registryPath = if ($Global:ConfigDir) { Join-Path $Global:ConfigDir 'PUBGTweakRegistry.psm1' } else { $null }
 if ($registryPath -and (Test-Path $registryPath)) {
     try {
-        Import-Module $registryPath -Force -ErrorAction Stop
+        # -DisableNameChecking: unterdrueckt die Unapproved-Verbs-Warnung
+        # (Revert-NPIPreset ist kein Get-Verb-Standardverb).
+        Import-Module $registryPath -Force -DisableNameChecking -ErrorAction Stop
         $Global:TweakRegistryLoaded = (Get-Command Get-PUBGTweakRegistry -ErrorAction SilentlyContinue) -ne $null
         Write-Status 'Tweak-Registry geladen' 'INFO'
     } catch {

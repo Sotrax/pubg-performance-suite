@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-system validation (AMD GPU / Intel CPU / Win10)
 - English UI localization
 
+## [0.31.0-beta] - 2026-05-17
+Behebt drei Bugs aus dem GUI-Test (Win11, RTX 5080, NVPI v3.0.1.12): der
+NVIDIA-Apply-Pfad (G-Sync + Presets) war komplett tot.
+
+### Fixed
+- **CRITICAL: NVIDIA-Apply schlug bei jedem Versuch fehl — `.nip`-Export ohne
+  BOM ließ den Parser crashen.** NVPI v3.x exportiert die `.nip` als UTF-16 LE
+  **ohne** Byte Order Mark; `XmlDocument.Load(path)` scheitert daran
+  reproduzierbar mit „Keine Unicodebyte-Reihenfolgemarkierung". Neue Helper-
+  Funktion `ConvertTo-NipXmlDocument` liest die Bytes selbst, erkennt das
+  Encoding per BOM bzw. Heuristik (BOMless UTF-16, UTF-16 LE/BE, UTF-8) und lädt
+  via `LoadXml(string)`. `Read-NipProfiles` nutzt jetzt diesen Helper.
+- **CRITICAL: Fehlerkaskade — Parse-Fehler wurde verschluckt, Folge-Exception
+  in der Apply-Pipeline.** `Read-NipProfiles` protokollierte einen Parse-Fehler
+  nur als `WARN` und lief mit leerem Ist-Zustand weiter. Jetzt: hartes `throw`.
+  `Set-NpiProfileSettings` und `Test-NpiChangesApplied` fangen das ab und
+  brechen **sauber** ab (`Success=$false`), statt einen halb gelesenen Zustand
+  zu importieren — der NVPI-Import resettet jedes Profil, ein leerer
+  Ist-Zustand hätte die übrigen User-Settings gelöscht. `ConvertFrom-NpiHex`
+  weist leeren/ungültigen Input mit klarer Meldung ab statt der kryptischen
+  `ToUInt32`-Exception.
+- **Unapproved-Verbs-Warnung beim Suite-Start.** `Import-Module` der
+  `PUBGTweakRegistry`-Registry zeigte eine PowerShell-WARNUNG (`Revert-NPIPreset`
+  nutzt mit „Revert" kein `Get-Verb`-Standardverb), die im `irm | iex`-Workflow
+  wie ein Fehler aussah. Beide `Import-Module`-Aufrufe (Suite + Diagnose) nutzen
+  jetzt `-DisableNameChecking`.
+
 ## [0.30.0-beta] - 2026-05-17
 Neues Feature: wählbare, validierte NVIDIA-Treiberprofil-Presets im Grafik-Tab.
 
